@@ -24,8 +24,9 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
   const filter = createFilter(options.include || ['**/*'], options.exclude);
 
   // Resolve loader path relative to this file
+  // When built, this file is in dist/index.js, but loader.js is in the root
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const loaderPath = path.resolve(__dirname, 'loader.js');
+  const loaderPath = path.resolve(__dirname, '../loader.js');
 
   return {
     name: 'vite-plugin-cos',
