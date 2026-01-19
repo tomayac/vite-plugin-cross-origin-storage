@@ -43,6 +43,43 @@ export default defineConfig({
 | `include` | `string \| RegExp \| Array` | `['**/*']` | Pattern to include chunks to be managed by COS. |
 | `exclude` | `string \| RegExp \| Array` | `undefined` | Pattern to exclude chunks from being managed. |
 
+## Recipe: Granular Vendor Splitting
+
+To maximize caching benefits, it is recommended to split your `node_modules` dependencies into separate chunks. This ensures that updates to one package (e.g., `react`) do not invalidate the cache for others (e.g., `lodash`).
+
+Add the following `manualChunks` configuration to your `vite.config.ts`:
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+import cosPlugin from 'vite-plugin-cross-origin-storage';
+
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            // Split each package into its own chunk
+            // e.g. "node_modules/react/..." -> "vendor-react"
+            // e.g. "node_modules/@scope/pkg/..." -> "vendor-scope-pkg"
+            const parts = id.split('node_modules/')[1].split('/');
+            const packageName = parts[0].startsWith('@') ? `${parts[0]}/${parts[1]}` : parts[0];
+            return `vendor-${packageName.replace('@', '').replace('/', '-')}`;
+          }
+        },
+      },
+    },
+  },
+  plugins: [
+    cosPlugin({
+      // Only manage these vendor chunks with COS
+      include: ['**/vendor-*'],
+    }),
+  ],
+});
+```
+
 ## How It Works
 
 1. **Build Time**:
