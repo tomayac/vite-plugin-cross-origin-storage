@@ -1,4 +1,5 @@
 import type { Plugin } from 'vite';
+import type { OutputBundle, OutputChunk } from 'rollup';
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
@@ -42,9 +43,9 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
       }
     },
 
-    async generateBundle(_options, bundle) {
-      const managedChunks: Record<string, any> = {};
-      let mainChunk: any = null;
+    async generateBundle(_options, bundle: OutputBundle) {
+      const managedChunks: Record<string, OutputChunk> = {};
+      let mainChunk: OutputChunk | null = null;
       let htmlAsset: any = null;
 
       for (const fileName in bundle) {
@@ -68,7 +69,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         // Step 1: Assign stable global variables to managed chunks
         // We do this BEFORE calculating hashes because the global variable names
         // are needed for import rewriting, which changes the code, which changes the hash.
-        const chunkInfo: Record<string, { globalVar: string, chunk: any }> = {};
+        const chunkInfo: Record<string, { globalVar: string, chunk: OutputChunk }> = {};
 
         for (const fileName in managedChunks) {
           // We use a hash of the filename to ensure it's a valid JS identifier and relatively short
@@ -81,7 +82,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         }
 
         // Collect ALL chunks to rewrite imports in them
-        const allChunks = Object.values(bundle).filter(c => c.type === 'chunk');
+        const allChunks = Object.values(bundle).filter((c): c is OutputChunk => c.type === 'chunk');
 
         // Step 2: Rewrite imports TO managed chunks in ALL chunks
         // This modifies the importers to look for the global variable (Blob URL)
