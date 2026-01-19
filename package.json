@@ -1,5 +1,5 @@
 {
-  "name": "vite-plugin-cos",
+  "name": "vite-plugin-cross-origin-storage",
   "version": "1.0.0",
   "description": "Vite plugin to load chunks from Cross-Origin Storage",
   "type": "module",
