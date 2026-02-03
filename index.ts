@@ -72,20 +72,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
       }
 
       if (mainChunk) {
-        // Step 1: Assign stable global variables to managed chunks
-        // We do this BEFORE calculating hashes because the global variable names
-        // are needed for import rewriting, which changes the code, which changes the hash.
-        const chunkInfo: Record<string, { globalVar: string, chunk: OutputChunk }> = {};
 
-        for (const fileName in managedChunks) {
-          // We use a hash of the filename to ensure it's a valid JS identifier and relatively short
-          // detailed: using filename hash creates a stable identifier for the lifetime of the file path
-          const nameHash = crypto.createHash('sha256').update(fileName).digest('hex').substring(0, 8);
-          chunkInfo[fileName] = {
-            globalVar: `__COS_CHUNK_${nameHash}__`,
-            chunk: managedChunks[fileName]
-          };
-        }
 
         // Collect ALL chunks to rewrite imports in them
         const allChunks = Object.values(bundle).filter((c): c is OutputChunk => c.type === 'chunk');

@@ -89,16 +89,10 @@
       }
 
       if (url) {
-        // Create a Data URL shim that re-exports everything from the Blob URL.
-        const shimSource = chunk.hasDefault
-          ? `export * from "${url}"; export { default } from "${url}";`
-          : `export * from "${url}";`;
-        const shimUrl = `data:text/javascript;base64,${btoa(shimSource)}`;
-
-        // Map the bare specifier and absolute path to this shim.
-        // These take precedence over the prefix mapping.
-        importMap.imports[chunk.fileName] = shimUrl;
-        importMap.imports[chunk.file] = shimUrl;
+        // Map the bare specifier and absolute path directly to the Blob URL.
+        // This avoids the indirection of a Data URL shim and handles cycles naturally.
+        importMap.imports[chunk.fileName] = url;
+        importMap.imports[chunk.file] = url;
 
         // Also set global if anyone still needs it (legacy)
         if (chunk.globalVar) {
