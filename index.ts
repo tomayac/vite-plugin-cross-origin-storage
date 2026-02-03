@@ -100,26 +100,37 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             const { globalVar } = chunkInfo[fileName];
             const chunkBasename = fileName.split('/').pop()!;
             const escapedName = chunkBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Regex to find static imports of the managed chunk
-            const pattern = `import\\s*\\{([^}]+)\\}\\s*from\\s*['"]\\.\\/${escapedName}['"];?`;
+
+            // Robust regex to find static imports of the managed chunk
+            // Handles:
+            // import { a, b } from "./foo.js"
+            // import * as x from "./foo.js"
+            // import x from "./foo.js"
+            // import "./foo.js"
+            const pattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]\\.\\/${escapedName}['"];?`;
             const importRegex = new RegExp(pattern, 'g');
 
             if (importRegex.test(targetChunk.code)) {
-              // Calculate relative path for fallback (in case COS loading fails or is unavailable)
-              // targetChunk.fileName is the importer (e.g. "assets/index.js")
-              // fileName is the importee (e.g. "assets/vendor.js")
-              // We need "./vendor.js", not "./assets/vendor.js"
-              let relativePath = path.relative(path.dirname(targetChunk.fileName), fileName);
-              if (!relativePath.startsWith('.')) {
-                relativePath = `./${relativePath}`;
-              }
+              const base = config.base.endsWith('/') ? config.base : config.base + '/';
+              const absoluteUrl = `new URL("${base}${fileName}", document.baseURI).href`;
 
-              targetChunk.code = targetChunk.code.replace(importRegex, (_match: string, bindings: string) => {
-                const destructuringPattern = bindings.split(',').map(b => {
-                  const parts = b.trim().split(/\s+as\s+/);
-                  return parts.length === 2 ? `${parts[0]}:${parts[1]}` : parts[0];
-                }).join(',');
-                return `const {${destructuringPattern}}=await import(window.${globalVar}||"${relativePath}");`;
+              targetChunk.code = targetChunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
+                const fallback = `await import(${absoluteUrl})`;
+
+                if (named) {
+                  const destructuringPattern = named.split(',').map(b => {
+                    const parts = b.trim().split(/\s+as\s+/);
+                    return parts.length === 2 ? `${parts[0]}:${parts[1]}` : parts[0];
+                  }).join(',');
+                  return `const {${destructuringPattern}}=await import(window.${globalVar}||${absoluteUrl});`;
+                } else if (namespace) {
+                  return `const ${namespace}=await import(window.${globalVar}||${absoluteUrl});`;
+                } else if (defaultImport) {
+                  return `const ${defaultImport}=(await import(window.${globalVar}||${absoluteUrl})).default;`;
+                } else {
+                  // Side-effect import
+                  return `await import(window.${globalVar}||${absoluteUrl});`;
+                }
               });
             }
           }
@@ -127,36 +138,36 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
 
         // Step 3: Rewrite imports to UNMANAGED chunks in MANAGED chunks.
         // Managed chunks are loaded via Blob URLs. Relative imports fail in Blob URLs.
-        // Absolute paths (e.g. "/assets/foo.js") work but depend on the app being at domain root.
-        // To support subdirectories (and typical "base: './'" configs), we usage dynamic imports
-        // with runtime URL resolution against `document.baseURI`.
         for (const fileName in managedChunks) {
           const chunk = managedChunks[fileName];
-          // Check all imports designated by Rollup
           chunk.imports.forEach((importedFile: string) => {
-            // If the importedFile is NOT in chunkInfo, it is unmanaged.
             if (!chunkInfo[importedFile]) {
               const importedBasename = importedFile.split('/').pop()!;
               const escapedName = importedBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-              // We need to match the full import statement to rewrite it to a destructuring assignment
-              // Pattern: import { a as b, c } from "./foo.js";
-              const pattern = `import\\s*\\{([^}]+)\\}\\s*from\\s*['"]\\.\\/${escapedName}['"];?`;
+              const pattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]\\.\\/${escapedName}['"];?`;
               const importRegex = new RegExp(pattern, 'g');
 
               if (importRegex.test(chunk.code)) {
-                chunk.code = chunk.code.replace(importRegex, (_match: string, bindings: string) => {
-                  const destructuringPattern = bindings.split(',').map(b => {
-                    const parts = b.trim().split(/\s+as\s+/);
-                    return parts.length === 2 ? `${parts[0]}:${parts[1]}` : parts[0];
-                  }).join(',');
-                  // Rewrite to dynamic import using document.baseURI to resolve the path correctly relative to the page
-                  return `const {${destructuringPattern}}=await import(new URL("${importedFile}", document.baseURI).href);`;
+                const base = config.base.endsWith('/') ? config.base : config.base + '/';
+                const absoluteUrl = `new URL("${base}${importedFile}", document.baseURI).href`;
+
+                chunk.code = chunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
+                  if (named) {
+                    const destructuringPattern = named.split(',').map(b => {
+                      const parts = b.trim().split(/\s+as\s+/);
+                      return parts.length === 2 ? `${parts[0]}:${parts[1]}` : parts[0];
+                    }).join(',');
+                    return `const {${destructuringPattern}}=await import(${absoluteUrl});`;
+                  } else if (namespace) {
+                    return `const ${namespace}=await import(${absoluteUrl});`;
+                  } else if (defaultImport) {
+                    return `const ${defaultImport}=(await import(${absoluteUrl})).default;`;
+                  } else {
+                    return `await import(${absoluteUrl});`;
+                  }
                 });
               }
-
-              // Also handle side-effect imports if any? (Likely not for vendor chunks, but good to be safe?)
-              // For now, focusing on named imports as that's what Rollup outputs for code splitting.
             }
           });
         }
