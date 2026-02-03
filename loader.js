@@ -51,8 +51,16 @@
   }
 
   // Load all managed chunks in parallel
-  if (chunksToLoad.length > 0) {
+  if (Object.keys(manifest).length > 0) {
     const importMap = { imports: {} };
+
+    // Fill unmanaged chunks first
+    for (const fileName in manifest) {
+      const entry = manifest[fileName];
+      if (fileName !== 'index' && !entry.hash) {
+        importMap.imports[fileName] = entry.file;
+      }
+    }
 
     await Promise.all(chunksToLoad.map(async (chunk) => {
       let url = null;
@@ -80,15 +88,14 @@
 
       if (url) {
         // Create a Data URL shim that re-exports everything from the Blob URL.
-        // This provides a "stable" alias that works with Import Maps and handles cycles.
-        let shimSource = `export * from "${url}";`;
-        if (chunk.hasDefault) {
-          shimSource += `export { default } from "${url}";`;
-        }
+        const shimSource = chunk.hasDefault
+          ? `export * from "${url}"; export { default } from "${url}";`
+          : `export * from "${url}";`;
         const shimUrl = `data:text/javascript;base64,${btoa(shimSource)}`;
 
-        // Map the absolute path to this shim
-        importMap.imports[chunk.file] = shimUrl;
+        // Map the bare specifier (fileName) and full paths to this shim
+        importMap.imports[chunk.fileName] = shimUrl; // bare specifier
+        importMap.imports[chunk.file] = shimUrl;     // absolute path (legacy/fallback)
 
         // Also set global if anyone still needs it (legacy)
         if (chunk.globalVar) {

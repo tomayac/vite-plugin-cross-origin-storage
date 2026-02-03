@@ -90,66 +90,78 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         // Collect ALL chunks to rewrite imports in them
         const allChunks = Object.values(bundle).filter((c): c is OutputChunk => c.type === 'chunk');
 
-        // Step 2: (Removed) We no longer rewrite imports TO managed chunks in UNMANAGED chunks.
-        // Instead, the browser will use the original static imports, which will be redirected
-        // to the COS Data URL shims via the Import Map injected by the loader.
-        // This avoids promise deadlocks caused by circular dependencies and await import.
+        // Step 2: Rewrite ALL imports that point to chunks in the bundle to use bare specifiers.
+        // We use the fileName (e.g. 'assets/vendor-react.js') as a bare specifier.
+        // This avoids issues with non-hierarchical base URLs (like blob: or data:).
+        // The Import Map will then map these bare specifiers to either COS Data URL shims
+        // or absolute paths on the server.
+        for (const targetChunk of allChunks) {
+          for (const fileName in bundle) {
+            const chunk = bundle[fileName];
+            if (chunk.type !== 'chunk') continue;
 
+            const chunkBasename = fileName.split('/').pop()!;
+            const escapedName = chunkBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-        // Step 3: Rewrite ALL imports in MANAGED chunks to be absolute.
-        // Managed chunks are loaded via Blob URLs. Relative imports fail in Blob URLs.
-        // By making them absolute (e.g. /base/assets/foo.js), they will be correctly
-        // resolved against the document's base URI. If the imported file is also
-        // a managed chunk, it will be intercepted by the Import Map and redirected
-        // to its COS shim.
-        for (const fileName in managedChunks) {
-          const chunk = managedChunks[fileName];
-          chunk.imports.forEach((importedFile: string) => {
-            const importedBasename = importedFile.split('/').pop()!;
-            const escapedName = importedBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
+            // Find relative imports that point to this chunk
             const pattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]\\.\\/${escapedName}['"];?`;
             const importRegex = new RegExp(pattern, 'g');
 
-            if (importRegex.test(chunk.code)) {
-              const base = config.base.endsWith('/') ? config.base : config.base + '/';
-              const absoluteUrl = `${base}${importedFile}`;
+            if (importRegex.test(targetChunk.code)) {
+              // Use the fileName itself as a bare specifier
+              const bareSpecifier = fileName;
 
-              chunk.code = chunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
+              targetChunk.code = targetChunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
                 if (named) {
-                  return `import {${named}} from "${absoluteUrl}";`;
+                  return `import {${named}} from "${bareSpecifier}";`;
                 } else if (namespace) {
-                  return `import * as ${namespace} from "${absoluteUrl}";`;
+                  return `import * as ${namespace} from "${bareSpecifier}";`;
                 } else if (defaultImport) {
-                  return `import ${defaultImport} from "${absoluteUrl}";`;
+                  return `import ${defaultImport} from "${bareSpecifier}";`;
                 } else {
-                  return `import "${absoluteUrl}";`;
+                  return `import "${bareSpecifier}";`;
                 }
               });
             }
-          });
+          }
         }
 
-        // Step 4: Calculate final hashes and build manifest
-        // Now that code is modified (rewritten), we calculate the hash of the ACTUAL content that will be on disk.
+        // Step 3 (Removed): Replaced by unified Step 2 bare-specifier rewriting.
+
+
+        // Step 4: Calculate final hashes and build manifest for ALL chunks
         const manifest: Record<string, any> = {};
-        for (const fileName in chunkInfo) {
-          const { chunk, globalVar } = chunkInfo[fileName];
-          const finalHash = crypto.createHash('sha256').update(chunk.code).digest('hex');
+        const base = config.base.endsWith('/') ? config.base : config.base + '/';
 
-          // Detect if the chunk has a default export
-          // Rollup typically outputs "export { name as default }" for default exports in ES modules
-          const hasDefault = /export\s+\{\s*([^}]+\s+as\s+)?default\s*\}/.test(chunk.code) ||
-            /export\s+default\s+/.test(chunk.code);
+        for (const fileName in bundle) {
+          const chunk = bundle[fileName];
+          if (chunk.type !== 'chunk') continue;
 
-          const base = config.base.endsWith('/') ? config.base : config.base + '/';
-          manifest[fileName] = {
-            file: `${base}${fileName}`,
-            hash: finalHash,
-            globalVar: globalVar,
-            hasDefault
-          };
+          if (chunkInfo[fileName]) {
+            const { globalVar } = chunkInfo[fileName];
+            const finalHash = crypto.createHash('sha256').update(chunk.code).digest('hex');
+
+            // Detect if the chunk has a default export
+            const hasDefault = /export\s+\{\s*([^}]+\s+as\s+)?default\s*\}/.test(chunk.code) ||
+              /export\s+default\s+/.test(chunk.code);
+
+            manifest[fileName] = {
+              fileName: fileName,
+              file: `${base}${fileName}`,
+              hash: finalHash,
+              globalVar: globalVar,
+              hasDefault
+            };
+          } else {
+            // Unmanaged chunk - still include in manifest so it can be mapped in Import Map
+            manifest[fileName] = {
+              fileName: fileName,
+              file: `${base}${fileName}`,
+              unmanaged: true
+            };
+          }
         }
+
 
         manifest['index'] = {
           file: `${config.base.endsWith('/') ? config.base : config.base + '/'}${mainChunk.fileName}`
