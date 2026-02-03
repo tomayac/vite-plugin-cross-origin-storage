@@ -51,15 +51,17 @@
   }
 
   // Load all managed chunks in parallel
-  if (Object.keys(manifest).length > 0) {
+  if (chunksToLoad.length > 0) {
     const importMap = { imports: {} };
 
-    // Fill unmanaged chunks first
-    for (const fileName in manifest) {
-      const entry = manifest[fileName];
-      if (fileName !== 'index' && !entry.hash) {
-        importMap.imports[fileName] = entry.file;
-      }
+    // Prefix mapping: Handles all unmanaged chunks automatically.
+    // Longest prefix wins in Import Maps, so specific managed entries below take precedence.
+    // We assume all chunks are in the same relative directory as the managed ones.
+    const firstChunk = chunksToLoad[0];
+    const assetsDir = firstChunk.fileName.substring(0, firstChunk.fileName.lastIndexOf('/') + 1);
+    const assetsUrl = firstChunk.file.substring(0, firstChunk.file.lastIndexOf('/') + 1);
+    if (assetsDir && assetsUrl) {
+      importMap.imports[assetsDir] = assetsUrl;
     }
 
     await Promise.all(chunksToLoad.map(async (chunk) => {
@@ -93,9 +95,10 @@
           : `export * from "${url}";`;
         const shimUrl = `data:text/javascript;base64,${btoa(shimSource)}`;
 
-        // Map the bare specifier (fileName) and full paths to this shim
-        importMap.imports[chunk.fileName] = shimUrl; // bare specifier
-        importMap.imports[chunk.file] = shimUrl;     // absolute path (legacy/fallback)
+        // Map the bare specifier and absolute path to this shim.
+        // These take precedence over the prefix mapping.
+        importMap.imports[chunk.fileName] = shimUrl;
+        importMap.imports[chunk.file] = shimUrl;
 
         // Also set global if anyone still needs it (legacy)
         if (chunk.globalVar) {
