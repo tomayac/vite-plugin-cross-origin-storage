@@ -174,17 +174,22 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
 
         // Step 4: Calculate final hashes and build manifest
         // Now that code is modified (rewritten), we calculate the hash of the ACTUAL content that will be on disk.
-        // This ensures that if the rewrite logic changes (e.g. absolute paths), the hash changes, busting the COS cache.
         const manifest: Record<string, any> = {};
         for (const fileName in chunkInfo) {
           const { chunk, globalVar } = chunkInfo[fileName];
           const finalHash = crypto.createHash('sha256').update(chunk.code).digest('hex');
 
+          // Detect if the chunk has a default export
+          // Rollup typically outputs "export { name as default }" for default exports in ES modules
+          const hasDefault = /export\s+\{\s*([^}]+\s+as\s+)?default\s*\}/.test(chunk.code) ||
+            /export\s+default\s+/.test(chunk.code);
+
           const base = config.base.endsWith('/') ? config.base : config.base + '/';
           manifest[fileName] = {
             file: `${base}${fileName}`,
             hash: finalHash,
-            globalVar: globalVar
+            globalVar: globalVar,
+            hasDefault
           };
         }
 

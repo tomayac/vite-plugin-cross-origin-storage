@@ -51,8 +51,9 @@
   }
 
   // Load all managed chunks in parallel
-  // If COS is not available, we skip this and fall back to native network loading via the import() rewrites.
-  if (isCOSAvailable && chunksToLoad.length > 0) {
+  if (chunksToLoad.length > 0) {
+    const importMap = { imports: {} };
+
     await Promise.all(chunksToLoad.map(async (chunk) => {
       let url = null;
 
@@ -77,11 +78,32 @@
         }
       }
 
-      // Set global variable if we have a URL
-      if (url && chunk.globalVar) {
-        window[chunk.globalVar] = url;
+      if (url) {
+        // Create a Data URL shim that re-exports everything from the Blob URL.
+        // This provides a "stable" alias that works with Import Maps and handles cycles.
+        let shimSource = `export * from "${url}";`;
+        if (chunk.hasDefault) {
+          shimSource += `export { default } from "${url}";`;
+        }
+        const shimUrl = `data:text/javascript;base64,${btoa(shimSource)}`;
+
+        // Map the absolute path to this shim
+        importMap.imports[chunk.file] = shimUrl;
+
+        // Also set global if anyone still needs it (legacy)
+        if (chunk.globalVar) {
+          window[chunk.globalVar] = url;
+        }
       }
     }));
+
+    // Inject the importmap
+    if (Object.keys(importMap.imports).length > 0) {
+      const imScript = document.createElement('script');
+      imScript.type = 'importmap';
+      imScript.textContent = JSON.stringify(importMap);
+      document.head.appendChild(imScript);
+    }
   }
 
   // Start App
