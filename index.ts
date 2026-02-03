@@ -90,46 +90,85 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         // Collect ALL chunks to rewrite imports in them
         const allChunks = Object.values(bundle).filter((c): c is OutputChunk => c.type === 'chunk');
 
-        // Step 2: Rewrite ALL imports that point to chunks in the bundle to use bare specifiers.
-        // We use the fileName (e.g. 'assets/vendor-react.js') as a bare specifier.
-        // This avoids issues with non-hierarchical base URLs (like blob: or data:).
-        // The Import Map will then map these bare specifiers to either COS Data URL shims
-        // or absolute paths on the server.
+        const managedChunkNames = new Set(Object.keys(managedChunks));
+        const chunksNeededInImportMap = new Set<string>(managedChunkNames);
+
+        // Transitively find all unmanaged chunks that managed chunks depend on.
+        // These MUST be in the Import Map so that Blob URLs can find them via bare specifiers.
+        const queue = Array.from(managedChunkNames);
+        while (queue.length > 0) {
+          const currentName = queue.shift()!;
+          const chunk = bundle[currentName] as OutputChunk;
+          if (!chunk) continue;
+          [...chunk.imports, ...chunk.dynamicImports].forEach(dep => {
+            if (!chunksNeededInImportMap.has(dep)) {
+              chunksNeededInImportMap.add(dep);
+              const depChunk = bundle[dep];
+              if (depChunk && depChunk.type === 'chunk' && !managedChunkNames.has(dep)) {
+                queue.push(dep);
+              }
+            }
+          });
+        }
+
+        // Step 2: Rewrite imports to use bare specifiers where required.
         for (const targetChunk of allChunks) {
-          for (const fileName in bundle) {
-            const chunk = bundle[fileName];
-            if (chunk.type !== 'chunk') continue;
+          const importerDir = path.dirname(targetChunk.fileName);
 
-            const chunkBasename = fileName.split('/').pop()!;
-            const escapedName = chunkBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // Iterate over all chunks in the bundle to find and rewrite relative imports
+          // which point to managed chunks or which originate from managed chunks.
+          for (const depFileName in bundle) {
+            const depChunk = bundle[depFileName];
+            if (!depChunk || depChunk.type !== 'chunk') continue;
 
-            // Find relative imports that point to this chunk
-            const pattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]\\.\\/${escapedName}['"];?`;
-            const importRegex = new RegExp(pattern, 'g');
+            // Calculate the exact relative path Rollup likely used
+            let relPath = path.relative(importerDir, depFileName);
+            if (!relPath.startsWith('.')) relPath = './' + relPath;
+            const escapedRelPath = relPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-            if (importRegex.test(targetChunk.code)) {
-              // Use the fileName itself as a bare specifier
-              const bareSpecifier = fileName;
+            // 1. Regex for static imports: import ... from "./path/to/dep.js"
+            const staticPattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]${escapedRelPath}['"];?`;
+            const staticRegex = new RegExp(staticPattern, 'g');
 
-              targetChunk.code = targetChunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
-                if (named) {
-                  return `import {${named}} from "${bareSpecifier}";`;
-                } else if (namespace) {
-                  return `import * as ${namespace} from "${bareSpecifier}";`;
-                } else if (defaultImport) {
-                  return `import ${defaultImport} from "${bareSpecifier}";`;
-                } else {
-                  return `import "${bareSpecifier}";`;
-                }
+            // 2. Regex for dynamic imports: import("./path/to/dep.js")
+            const dynamicPattern = `import\\s*\\(\\s*['"]${escapedRelPath}['"]\\s*\\)`;
+            const dynamicRegex = new RegExp(dynamicPattern, 'g');
+
+            // 3. Regex for exports: export ... from "./path/to/dep.js"
+            const exportPattern = `export\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s*(?:as\\s+([^\\s]+))?))\\s*from\\s*['"]${escapedRelPath}['"];?`;
+            const exportRegex = new RegExp(exportPattern, 'g');
+
+            const isDepManaged = managedChunkNames.has(depFileName);
+            const isTargetManaged = managedChunkNames.has(targetChunk.fileName);
+
+            // We rewrite if the destination is managed (to hit the COS shim)
+            // OR if the target is managed (to escape the blob: sandbox).
+            if (isDepManaged || isTargetManaged) {
+              const bareSpecifier = depFileName;
+
+              // Rewrite static imports
+              targetChunk.code = targetChunk.code.replace(staticRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
+                if (named) return `import {${named}} from "${bareSpecifier}";`;
+                if (namespace) return `import * as ${namespace} from "${bareSpecifier}";`;
+                if (defaultImport) return `import ${defaultImport} from "${bareSpecifier}";`;
+                return `import "${bareSpecifier}";`;
+              });
+
+              // Rewrite dynamic imports
+              targetChunk.code = targetChunk.code.replace(dynamicRegex, () => `import("${bareSpecifier}")`);
+
+              // Rewrite exports
+              targetChunk.code = targetChunk.code.replace(exportRegex, (_match: string, named?: string, namespace?: string) => {
+                if (named) return `export {${named}} from "${bareSpecifier}";`;
+                if (namespace) return `export * as ${namespace} from "${bareSpecifier}";`;
+                return `export * from "${bareSpecifier}";`;
               });
             }
           }
         }
 
-        // Step 3 (Removed): Replaced by unified Step 2 bare-specifier rewriting.
 
-
-        // Step 4: Calculate final hashes and build manifest for ALL chunks
+        // Step 4: Calculate final hashes and build manifest for required chunks
         const manifest: Record<string, any> = {};
         const base = config.base.endsWith('/') ? config.base : config.base + '/';
 
@@ -137,28 +176,30 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           const chunk = bundle[fileName];
           if (chunk.type !== 'chunk') continue;
 
-          if (chunkInfo[fileName]) {
-            const { globalVar } = chunkInfo[fileName];
-            const finalHash = crypto.createHash('sha256').update(chunk.code).digest('hex');
+          // Only include in manifest if managed or required by a managed chunk
+          if (chunksNeededInImportMap.has(fileName)) {
+            if (managedChunkNames.has(fileName)) {
+              const { globalVar } = chunkInfo[fileName];
+              const finalHash = crypto.createHash('sha256').update(chunk.code).digest('hex');
 
-            // Detect if the chunk has a default export
-            const hasDefault = /export\s+\{\s*([^}]+\s+as\s+)?default\s*\}/.test(chunk.code) ||
-              /export\s+default\s+/.test(chunk.code);
+              // Detect if the chunk has a default export using Rollup's reliable metadata
+              const hasDefault = chunk.exports.includes('default');
 
-            manifest[fileName] = {
-              fileName: fileName,
-              file: `${base}${fileName}`,
-              hash: finalHash,
-              globalVar: globalVar,
-              hasDefault
-            };
-          } else {
-            // Unmanaged chunk - still include in manifest so it can be mapped in Import Map
-            manifest[fileName] = {
-              fileName: fileName,
-              file: `${base}${fileName}`,
-              unmanaged: true
-            };
+              manifest[fileName] = {
+                fileName: fileName,
+                file: `${base}${fileName}`,
+                hash: finalHash,
+                globalVar: globalVar,
+                hasDefault
+              };
+            } else {
+              // Unmanaged chunk needed for Import Map resolution
+              manifest[fileName] = {
+                fileName: fileName,
+                file: `${base}${fileName}`,
+                unmanaged: true
+              };
+            }
           }
         }
 
