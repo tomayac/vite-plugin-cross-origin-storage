@@ -27,11 +27,16 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
   // When built, this file is in dist/index.js, but loader.js is in the root
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const loaderPath = path.resolve(__dirname, './loader.js');
+  let config: any;
 
   return {
     name: 'vite-plugin-cos',
     apply: 'build',
     enforce: 'post',
+
+    configResolved(resolvedConfig) {
+      config = resolvedConfig;
+    },
 
     transformIndexHtml: {
       order: 'post',
@@ -164,15 +169,16 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           const { chunk, globalVar } = chunkInfo[fileName];
           const finalHash = crypto.createHash('sha256').update(chunk.code).digest('hex');
 
+          const base = config.base.endsWith('/') ? config.base : config.base + '/';
           manifest[fileName] = {
-            file: `/${fileName}`,
+            file: `${base}${fileName}`,
             hash: finalHash,
             globalVar: globalVar
           };
         }
 
         manifest['index'] = {
-          file: `/${mainChunk.fileName}`
+          file: `${config.base.endsWith('/') ? config.base : config.base + '/'}${mainChunk.fileName}`
         };
 
         // Inject loader and inlined manifest into index.html
