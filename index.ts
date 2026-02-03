@@ -90,84 +90,42 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         // Collect ALL chunks to rewrite imports in them
         const allChunks = Object.values(bundle).filter((c): c is OutputChunk => c.type === 'chunk');
 
-        // Step 2: Rewrite imports TO managed chunks in ALL chunks
-        // This modifies the importers to look for the global variable (Blob URL)
-        for (const targetChunk of allChunks) {
-          for (const fileName in chunkInfo) {
-            // Avoid self-reference
-            if (targetChunk.fileName === fileName) continue;
+        // Step 2: (Removed) We no longer rewrite imports TO managed chunks in UNMANAGED chunks.
+        // Instead, the browser will use the original static imports, which will be redirected
+        // to the COS Data URL shims via the Import Map injected by the loader.
+        // This avoids promise deadlocks caused by circular dependencies and await import.
 
-            const { globalVar } = chunkInfo[fileName];
-            const chunkBasename = fileName.split('/').pop()!;
-            const escapedName = chunkBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-            // Robust regex to find static imports of the managed chunk
-            // Handles:
-            // import { a, b } from "./foo.js"
-            // import * as x from "./foo.js"
-            // import x from "./foo.js"
-            // import "./foo.js"
-            const pattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]\\.\\/${escapedName}['"];?`;
-            const importRegex = new RegExp(pattern, 'g');
-
-            if (importRegex.test(targetChunk.code)) {
-              const base = config.base.endsWith('/') ? config.base : config.base + '/';
-              const absoluteUrl = `new URL("${base}${fileName}", document.baseURI).href`;
-
-              targetChunk.code = targetChunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
-                const fallback = `await import(${absoluteUrl})`;
-
-                if (named) {
-                  const destructuringPattern = named.split(',').map(b => {
-                    const parts = b.trim().split(/\s+as\s+/);
-                    return parts.length === 2 ? `${parts[0]}:${parts[1]}` : parts[0];
-                  }).join(',');
-                  return `const {${destructuringPattern}}=await import(window.${globalVar}||${absoluteUrl});`;
-                } else if (namespace) {
-                  return `const ${namespace}=await import(window.${globalVar}||${absoluteUrl});`;
-                } else if (defaultImport) {
-                  return `const ${defaultImport}=(await import(window.${globalVar}||${absoluteUrl})).default;`;
-                } else {
-                  // Side-effect import
-                  return `await import(window.${globalVar}||${absoluteUrl});`;
-                }
-              });
-            }
-          }
-        }
-
-        // Step 3: Rewrite imports to UNMANAGED chunks in MANAGED chunks.
+        // Step 3: Rewrite ALL imports in MANAGED chunks to be absolute.
         // Managed chunks are loaded via Blob URLs. Relative imports fail in Blob URLs.
+        // By making them absolute (e.g. /base/assets/foo.js), they will be correctly
+        // resolved against the document's base URI. If the imported file is also
+        // a managed chunk, it will be intercepted by the Import Map and redirected
+        // to its COS shim.
         for (const fileName in managedChunks) {
           const chunk = managedChunks[fileName];
           chunk.imports.forEach((importedFile: string) => {
-            if (!chunkInfo[importedFile]) {
-              const importedBasename = importedFile.split('/').pop()!;
-              const escapedName = importedBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const importedBasename = importedFile.split('/').pop()!;
+            const escapedName = importedBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-              const pattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]\\.\\/${escapedName}['"];?`;
-              const importRegex = new RegExp(pattern, 'g');
+            const pattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]\\.\\/${escapedName}['"];?`;
+            const importRegex = new RegExp(pattern, 'g');
 
-              if (importRegex.test(chunk.code)) {
-                const base = config.base.endsWith('/') ? config.base : config.base + '/';
-                const absoluteUrl = `new URL("${base}${importedFile}", document.baseURI).href`;
+            if (importRegex.test(chunk.code)) {
+              const base = config.base.endsWith('/') ? config.base : config.base + '/';
+              const absoluteUrl = `${base}${importedFile}`;
 
-                chunk.code = chunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
-                  if (named) {
-                    const destructuringPattern = named.split(',').map(b => {
-                      const parts = b.trim().split(/\s+as\s+/);
-                      return parts.length === 2 ? `${parts[0]}:${parts[1]}` : parts[0];
-                    }).join(',');
-                    return `const {${destructuringPattern}}=await import(${absoluteUrl});`;
-                  } else if (namespace) {
-                    return `const ${namespace}=await import(${absoluteUrl});`;
-                  } else if (defaultImport) {
-                    return `const ${defaultImport}=(await import(${absoluteUrl})).default;`;
-                  } else {
-                    return `await import(${absoluteUrl});`;
-                  }
-                });
-              }
+              chunk.code = chunk.code.replace(importRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
+                if (named) {
+                  return `import {${named}} from "${absoluteUrl}";`;
+                } else if (namespace) {
+                  return `import * as ${namespace} from "${absoluteUrl}";`;
+                } else if (defaultImport) {
+                  return `import ${defaultImport} from "${absoluteUrl}";`;
+                } else {
+                  return `import "${absoluteUrl}";`;
+                }
+              });
             }
           });
         }
