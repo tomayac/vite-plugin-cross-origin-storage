@@ -58,10 +58,13 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         const chunk = bundle[fileName];
         if (chunk.type === 'chunk') {
           if (chunk.isEntry) {
+            console.log(`COS Plugin: [ENTRY] ${fileName}`);
             mainChunk = chunk;
           } else {
             // Apply filter to determine if this chunk should be managed by COS
-            if (filter(fileName)) {
+            const res = filter(fileName);
+            console.log(`COS Plugin: [FILTER] ${fileName} -> ${res ? 'INCLUDE' : 'SKIP'}`);
+            if (res) {
               managedChunks[fileName] = chunk;
             }
           }
