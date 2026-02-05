@@ -177,8 +177,10 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           };
         }
 
+        const entryFileName = mainChunk.fileName;
         manifest['index'] = {
-          file: `${config.base.endsWith('/') ? config.base : config.base + '/'}${mainChunk.fileName}`,
+          fileName: entryFileName,
+          file: `${base}${entryFileName}`,
         };
 
         // Inject loader and inlined manifest into index.html
