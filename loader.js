@@ -81,8 +81,9 @@
     const loadPromises = chunksToLoad.map(async (chunk) => {
       const dataUrl = await getChunkDataUrl(chunk);
       if (dataUrl) {
-        // Use a bare specifier prefix to avoid hierarchical resolution issues
-        importMap.imports[`cos-chunk:${chunk.fileName}`] = dataUrl;
+        // Use a slash-based prefix to ensuring it's treated as a bare specifier string,
+        // rather than an unsupported protocol scheme (like cos-chunk:).
+        importMap.imports[`cos-chunk/${chunk.fileName}`] = dataUrl;
       }
     });
 
