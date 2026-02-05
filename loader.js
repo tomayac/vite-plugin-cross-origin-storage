@@ -1,5 +1,5 @@
 (async function () {
-  await new Promise(resolve => setTimeout(resolve, 100));
+  await new Promise((resolve) => setTimeout(resolve, 100));
 
   const isCOSAvailable = 'crossOriginStorage' in navigator;
   console.log('COS Loader: isCOSAvailable =', isCOSAvailable);
@@ -15,7 +15,7 @@
   }
 
   // Identify managed chunks (anything with a hash)
-  const chunksToLoad = Object.values(manifest).filter(item => item.hash);
+  const chunksToLoad = Object.values(manifest).filter((item) => item.hash);
 
   async function getBlobFromCOS(hash) {
     if (!isCOSAvailable) return null;
@@ -27,7 +27,8 @@
         return await handles[0].getFile();
       }
     } catch (err) {
-      if (err.name !== 'NotFoundError') console.error('COS Loader: Error checking COS', err);
+      if (err.name !== 'NotFoundError')
+        console.error('COS Loader: Error checking COS', err);
     }
     return null;
   }
@@ -58,48 +59,65 @@
     // Longest prefix wins in Import Maps, so specific managed entries below take precedence.
     // We assume all chunks are in the same relative directory as the managed ones.
     const firstChunk = chunksToLoad[0];
-    const assetsDir = firstChunk.fileName.substring(0, firstChunk.fileName.lastIndexOf('/') + 1);
-    const assetsUrl = firstChunk.file.substring(0, firstChunk.file.lastIndexOf('/') + 1);
+    const assetsDir = firstChunk.fileName.substring(
+      0,
+      firstChunk.fileName.lastIndexOf('/') + 1
+    );
+    const assetsUrl = firstChunk.file.substring(
+      0,
+      firstChunk.file.lastIndexOf('/') + 1
+    );
     if (assetsDir && assetsUrl) {
       importMap.imports[assetsDir] = assetsUrl;
     }
 
-    await Promise.all(chunksToLoad.map(async (chunk) => {
-      let url = null;
+    await Promise.all(
+      chunksToLoad.map(async (chunk) => {
+        let url = null;
 
-      const cosBlob = await getBlobFromCOS(chunk.hash);
-      if (cosBlob) {
-        console.log(`COS Loader: Loaded ${chunk.file} from COS!`);
-        url = URL.createObjectURL(new Blob([cosBlob], { type: 'application/javascript' }));
-      } else {
-        console.log(`COS Loader: ${chunk.file} not in COS, fetching...`);
-        try {
-          const response = await fetch(chunk.file);
-          if (response.ok) {
-            const blob = await response.blob();
-            url = URL.createObjectURL(new Blob([blob], { type: 'application/javascript' }));
-            // Store in COS for next time
-            storeBlobInCOS(blob, chunk.hash);
-          } else {
-            console.error(`COS Loader: Fetch failed with status ${response.status}`);
+        const cosBlob = await getBlobFromCOS(chunk.hash);
+        if (cosBlob) {
+          console.log(`COS Loader: Loaded ${chunk.file} from COS!`);
+          url = URL.createObjectURL(
+            new Blob([cosBlob], { type: 'text/javascript' })
+          );
+        } else {
+          console.log(`COS Loader: ${chunk.file} not in COS, fetching...`);
+          try {
+            const response = await fetch(chunk.file);
+            if (response.ok) {
+              const blob = await response.blob();
+              url = URL.createObjectURL(
+                new Blob([blob], { type: 'text/javascript' })
+              );
+              // Store in COS for next time
+              storeBlobInCOS(blob, chunk.hash);
+            } else {
+              console.error(
+                `COS Loader: Fetch failed with status ${response.status}`
+              );
+            }
+          } catch (e) {
+            console.error(
+              `COS Loader: Network fetch failed for ${chunk.file}`,
+              e
+            );
           }
-        } catch (e) {
-          console.error(`COS Loader: Network fetch failed for ${chunk.file}`, e);
         }
-      }
 
-      if (url) {
-        // Map the bare specifier and absolute path directly to the Blob URL.
-        // This avoids the indirection of a Data URL shim and handles cycles naturally.
-        importMap.imports[chunk.fileName] = url;
-        importMap.imports[chunk.file] = url;
+        if (url) {
+          // Map the bare specifier and absolute path directly to the Blob URL.
+          // This avoids the indirection of a Data URL shim and handles cycles naturally.
+          importMap.imports[chunk.fileName] = url;
+          importMap.imports[chunk.file] = url;
 
-        // Also set global if anyone still needs it (legacy)
-        if (chunk.globalVar) {
-          window[chunk.globalVar] = url;
+          // Also set global if anyone still needs it (legacy)
+          if (chunk.globalVar) {
+            window[chunk.globalVar] = url;
+          }
         }
-      }
-    }));
+      })
+    );
 
     // Inject the importmap
     if (Object.keys(importMap.imports).length > 0) {
@@ -113,6 +131,8 @@
   // Start App
   try {
     console.log('COS Loader: Starting app...');
+    // Ensure the importmap is registered before importing
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await import(mainEntry.file);
   } catch (err) {
     console.error('COS Loader: Failed to start app', err);

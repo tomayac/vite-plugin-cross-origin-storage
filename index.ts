@@ -46,7 +46,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           /<script\s+[^>]*type=["']module["'][^>]*src=["'][^"']*index[^"']*["'][^>]*><\/script>/gi,
           '<!-- Entry script disabled by COS Plugin -->'
         );
-      }
+      },
     },
 
     async generateBundle(_options, bundle: OutputBundle) {
@@ -63,7 +63,9 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           } else {
             // Apply filter to determine if this chunk should be managed by COS
             const res = filter(fileName);
-            console.log(`COS Plugin: [FILTER] ${fileName} -> ${res ? 'INCLUDE' : 'SKIP'}`);
+            console.log(
+              `COS Plugin: [FILTER] ${fileName} -> ${res ? 'INCLUDE' : 'SKIP'}`
+            );
             if (res) {
               managedChunks[fileName] = chunk;
             }
@@ -75,20 +77,27 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
       }
 
       if (mainChunk) {
-
-
         // Collect ALL chunks to rewrite imports in them
-        const allChunks = Object.values(bundle).filter((c): c is OutputChunk => c.type === 'chunk');
+        const allChunks = Object.values(bundle).filter(
+          (c): c is OutputChunk => c.type === 'chunk'
+        );
 
         const managedChunkNames = new Set(Object.keys(managedChunks));
 
         // Step 1: Assign stable global variables to managed chunks
-        const managedChunkInfo: Record<string, { globalVar: string, chunk: OutputChunk }> = {};
+        const managedChunkInfo: Record<
+          string,
+          { globalVar: string; chunk: OutputChunk }
+        > = {};
         for (const fileName in managedChunks) {
-          const nameHash = crypto.createHash('sha256').update(fileName).digest('hex').substring(0, 8);
+          const nameHash = crypto
+            .createHash('sha256')
+            .update(fileName)
+            .digest('hex')
+            .substring(0, 8);
           managedChunkInfo[fileName] = {
             globalVar: `__COS_CHUNK_${nameHash}__`,
-            chunk: managedChunks[fileName]
+            chunk: managedChunks[fileName],
           };
         }
 
@@ -110,47 +119,49 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             if (isTargetManaged || isDepManaged) {
               let relPath = path.relative(importerDir, depFileName);
               if (!relPath.startsWith('.')) relPath = './' + relPath;
-              const escapedRelPath = relPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const escapedRelPath = relPath.replace(
+                /[.*+?^${}()|[\]\\]/g,
+                '\\$&'
+              );
 
               const bareSpecifier = depFileName;
 
-              // 1. Static imports: import ... from "./path/to/dep.js"
-              const staticPattern = `import\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s+as\\s+([^\\s]+)|([^\\s\\{\\}]+))\\s*from\\s*)?['"]${escapedRelPath}['"];?`;
+              // 1. Static imports/exports: (import|export) ... from "./path"
+              // Uses a negative lookahead to ensure we don't match across multiple statements.
+              // We use \b and \s* to handle minified code where spaces may be missing (e.g., import{...}from"./...").
+              const staticPattern = `(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${escapedRelPath}['"]\\s*;?`;
               const staticRegex = new RegExp(staticPattern, 'g');
 
-              targetChunk.code = targetChunk.code.replace(staticRegex, (_match: string, named?: string, namespace?: string, defaultImport?: string) => {
-                if (named) return `import {${named}} from "${bareSpecifier}";`;
-                if (namespace) return `import * as ${namespace} from "${bareSpecifier}";`;
-                if (defaultImport) return `import ${defaultImport} from "${bareSpecifier}";`;
-                return `import "${bareSpecifier}";`;
-              });
+              targetChunk.code = targetChunk.code.replace(
+                staticRegex,
+                (match, keyword, fromPart) => {
+                  return `${keyword}${fromPart ? ' ' + fromPart : ' '}"${bareSpecifier}";`;
+                }
+              );
 
-              // 2. Dynamic imports: import("./path/to/dep.js")
+              // 2. Dynamic imports: import("./path")
               const dynamicPattern = `import\\s*\\(\\s*['"]${escapedRelPath}['"]\\s*\\)`;
               const dynamicRegex = new RegExp(dynamicPattern, 'g');
-              targetChunk.code = targetChunk.code.replace(dynamicRegex, () => `import("${bareSpecifier}")`);
-
-              // 3. Exports: export ... from "./path/to/dep.js"
-              const exportPattern = `export\\s*(?:(?:\\{\\s*([^}]+)\\s*\\}|\\*\\s*(?:as\\s+([^\\s]+))?))\\s*from\\s*['"]${escapedRelPath}['"];?`;
-              const exportRegex = new RegExp(exportPattern, 'g');
-              targetChunk.code = targetChunk.code.replace(exportRegex, (_match: string, named?: string, namespace?: string) => {
-                if (named) return `export {${named}} from "${bareSpecifier}";`;
-                if (namespace) return `export * as ${namespace} from "${bareSpecifier}";`;
-                return `export * from "${bareSpecifier}";`;
-              });
+              targetChunk.code = targetChunk.code.replace(
+                dynamicRegex,
+                () => `import("${bareSpecifier}")`
+              );
             }
           }
         }
 
-
-
         // Step 4: Calculate final hashes and build manifest for MANAGED chunks only.
         const manifest: Record<string, any> = {};
-        const base = config.base.endsWith('/') ? config.base : config.base + '/';
+        const base = config.base.endsWith('/')
+          ? config.base
+          : config.base + '/';
 
         for (const fileName in managedChunkInfo) {
           const { chunk, globalVar } = managedChunkInfo[fileName];
-          const finalHash = crypto.createHash('sha256').update(chunk.code).digest('hex');
+          const finalHash = crypto
+            .createHash('sha256')
+            .update(chunk.code)
+            .digest('hex');
 
           // Detect if the chunk has a default export using Rollup's reliable metadata
           const hasDefault = chunk.exports.includes('default');
@@ -160,21 +171,22 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             file: `${base}${fileName}`,
             hash: finalHash,
             globalVar: globalVar,
-            hasDefault
+            hasDefault,
           };
         }
 
-
-
         manifest['index'] = {
-          file: `${config.base.endsWith('/') ? config.base : config.base + '/'}${mainChunk.fileName}`
+          file: `${config.base.endsWith('/') ? config.base : config.base + '/'}${mainChunk.fileName}`,
         };
 
         // Inject loader and inlined manifest into index.html
         if (htmlAsset) {
           try {
             let loaderCode = fs.readFileSync(loaderPath, 'utf-8');
-            loaderCode = loaderCode.replace('__COS_MANIFEST__', JSON.stringify(manifest));
+            loaderCode = loaderCode.replace(
+              '__COS_MANIFEST__',
+              JSON.stringify(manifest)
+            );
 
             let htmlSource = htmlAsset.source as string;
 
@@ -194,6 +206,6 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           }
         }
       }
-    }
+    },
   };
 }
