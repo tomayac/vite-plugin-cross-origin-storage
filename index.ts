@@ -82,10 +82,6 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           (c): c is OutputChunk => c.type === 'chunk'
         );
 
-        const base = config.base.endsWith('/')
-          ? config.base
-          : config.base + '/';
-
         const managedChunkNames = new Set(Object.keys(managedChunks));
 
         // Step 1: Assign stable global variables to managed chunks
@@ -128,7 +124,10 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
                 '\\$&'
               );
 
-              const bareSpecifier = `${base}${depFileName}`;
+              // Use a virtual bare specifier to force importmap resolution.
+              // This avoids all issues with relative paths, root-relative paths, and base URLs
+              // in restrictive contexts like Blob or Data URLs.
+              const bareSpecifier = `cos-id:${depFileName}`;
 
               // 1. Static imports/exports: (import|export) ... from "./path"
               // Uses a negative lookahead to ensure we don't match across multiple statements.
@@ -156,6 +155,9 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
 
         // Step 4: Calculate final hashes and build manifest for MANAGED chunks only.
         const manifest: Record<string, any> = {};
+        const base = config.base.endsWith('/')
+          ? config.base
+          : config.base + '/';
 
         for (const fileName in managedChunkInfo) {
           const { chunk, globalVar } = managedChunkInfo[fileName];

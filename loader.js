@@ -112,8 +112,8 @@
           const shim = `export * from "${url}";${chunk.hasDefault ? `export { default } from "${url}";` : ''}`;
           const shimUrl = `data:text/javascript;base64,${btoa(shim)}`;
 
-          importMap.imports[chunk.fileName] = shimUrl;
-          importMap.imports[chunk.file] = shimUrl;
+          // Map the virtual bare specifier to the shim
+          importMap.imports[`cos-id:${chunk.fileName}`] = shimUrl;
 
           // Also set global if anyone still needs it (legacy)
           if (chunk.globalVar) {
