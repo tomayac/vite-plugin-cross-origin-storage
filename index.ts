@@ -127,7 +127,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
               // Use a virtual bare specifier to force importmap resolution.
               // This avoids all issues with relative paths, root-relative paths, and base URLs
               // in restrictive contexts like Blob or Data URLs.
-              const bareSpecifier = `cos-id/${depFileName}`;
+              const bareSpecifier = `cos-id_${depFileName}`;
 
               // 1. Static imports/exports: (import|export) ... from "./path"
               // Uses a negative lookahead to ensure we don't match across multiple statements.

@@ -113,7 +113,7 @@
           const shimUrl = `data:text/javascript;base64,${btoa(shim)}`;
 
           // Map the virtual bare specifier to the shim
-          importMap.imports[`cos-id/${chunk.fileName}`] = shimUrl;
+          importMap.imports[`cos-id_${chunk.fileName}`] = shimUrl;
 
           // Also set global if anyone still needs it (legacy)
           if (chunk.globalVar) {
