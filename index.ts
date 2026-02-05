@@ -128,10 +128,10 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
                 '\\$&'
               );
 
-              // Bare specifier for Import Map mapping.
-              // We use a slash-based prefix to ensure the browser treats it as a bare specifier
-              // rather than an unsupported protocol scheme (which would cause CORS errors).
-              const bareSpecifier = `cos-chunk/${depFileName}`;
+              // Truly Bare specifier for Import Map mapping.
+              // We replace all slashes with hyphens to ensure the browser NEVER
+              // treats this as a URL-like specifier or a protocol scheme.
+              const bareSpecifier = `coschunk-${depFileName.replace(/\//g, '-')}`;
 
               // 1. Static imports/exports: (import|export) ... from "./path"
               // Uses a negative lookahead to ensure we don't match across multiple statements.

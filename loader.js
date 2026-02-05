@@ -81,9 +81,10 @@
     const loadPromises = chunksToLoad.map(async (chunk) => {
       const dataUrl = await getChunkDataUrl(chunk);
       if (dataUrl) {
-        // Use a slash-based prefix to ensuring it's treated as a bare specifier string,
-        // rather than an unsupported protocol scheme (like cos-chunk:).
-        importMap.imports[`cos-chunk/${chunk.fileName}`] = dataUrl;
+        // Use a hyphenated prefix and replace all slashes to ensure it's treated
+        // as a truly bare specifier, bypassing hierarchical/protocol checks.
+        const bareSpecifier = `coschunk-${chunk.fileName.replace(/\//g, '-')}`;
+        importMap.imports[bareSpecifier] = dataUrl;
       }
     });
 
