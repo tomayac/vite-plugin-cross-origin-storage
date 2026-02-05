@@ -81,8 +81,8 @@
     const loadPromises = chunksToLoad.map(async (chunk) => {
       const dataUrl = await getChunkDataUrl(chunk);
       if (dataUrl) {
-        // Map the relative path (as used in the plugin's bare specifier rewrite) to the data URL
-        importMap.imports[`./${chunk.fileName}`] = dataUrl;
+        // Map the absolute path (chunk.file) to the data URL
+        importMap.imports[chunk.file] = dataUrl;
       }
     });
 
@@ -97,9 +97,9 @@
     console.log('COS Loader: Import Map injected');
 
     // Import the main entry.
-    // The main entry itself is also managed and rewritten to use bare specifiers.
-    const entryFileName = mainEntry.fileName;
-    await import(`./${entryFileName}`);
+    // We use the absolute path (mainEntry.file) to ensure it's resolved correctly.
+    const entryUrl = mainEntry.file;
+    await import(entryUrl);
 
   } catch (err) {
     console.error('COS Loader: Failed to start app', err);
