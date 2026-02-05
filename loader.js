@@ -81,8 +81,8 @@
     const loadPromises = chunksToLoad.map(async (chunk) => {
       const dataUrl = await getChunkDataUrl(chunk);
       if (dataUrl) {
-        // Map the absolute path (chunk.file) to the data URL
-        importMap.imports[chunk.file] = dataUrl;
+        // Use a bare specifier prefix to avoid hierarchical resolution issues
+        importMap.imports[`cos-chunk:${chunk.fileName}`] = dataUrl;
       }
     });
 
@@ -97,7 +97,9 @@
     console.log('COS Loader: Import Map injected');
 
     // Import the main entry.
-    // We use the absolute path (mainEntry.file) to ensure it's resolved correctly.
+    // If the entry itself were managed, we would use cos-chunk: prefix here too.
+    // For now, it's loaded via its absolute path from the server,
+    // and its internal imports (rewritten by the plugin) will use cos-chunk:
     const entryUrl = mainEntry.file;
     await import(entryUrl);
 

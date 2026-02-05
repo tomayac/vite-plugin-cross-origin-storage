@@ -128,8 +128,10 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
                 '\\$&'
               );
 
-              // Absolute path for Import Map mapping.
-              const bareSpecifier = `${base}${depFileName}`;
+              // Bare specifier for Import Map mapping.
+              // We use a prefix to ensure the browser treats it as a bare specifier
+              // and resolves it via the import map rather than hierarchical resolution.
+              const bareSpecifier = `cos-chunk:${depFileName}`;
 
               // 1. Static imports/exports: (import|export) ... from "./path"
               // Uses a negative lookahead to ensure we don't match across multiple statements.
