@@ -128,8 +128,8 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
                 '\\$&'
               );
 
-              // Hardcoded origin as requested to bypass Blob/relative path issues.
-              const bareSpecifier = `http://localhost:5001${base}${depFileName}`;
+              // Relative path for Direct Data URL replacement in loader
+              const bareSpecifier = `./${depFileName}`;
 
               // 1. Static imports/exports: (import|export) ... from "./path"
               // Uses a negative lookahead to ensure we don't match across multiple statements.

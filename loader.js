@@ -16,6 +16,8 @@
 
   // Identify managed chunks (anything with a hash)
   const chunksToLoad = Object.values(manifest).filter((item) => item.hash);
+  const chunksByFileName = {};
+  chunksToLoad.forEach(c => chunksByFileName[c.fileName] = c);
 
   async function getBlobFromCOS(hash) {
     if (!isCOSAvailable) return null;
@@ -51,93 +53,114 @@
     }
   }
 
-  // Load all managed chunks in parallel
-  if (chunksToLoad.length > 0) {
-    const importMap = { imports: {} };
+  // Cache for resolved URLs
+  const resolvedUrls = {}; // fileName -> { blobUrl, shimUrl }
+  const processing = new Set();
 
-    // Prefix mapping: Handles all unmanaged chunks automatically.
-    // Longest prefix wins in Import Maps, so specific managed entries below take precedence.
-    // We assume all chunks are in the same relative directory as the managed ones.
-    const firstChunk = chunksToLoad[0];
-    const assetsDir = firstChunk.fileName.substring(
-      0,
-      firstChunk.fileName.lastIndexOf('/') + 1
-    );
-    const assetsUrl = firstChunk.file.substring(
-      0,
-      firstChunk.file.lastIndexOf('/') + 1
-    );
-    if (assetsDir && assetsUrl) {
-      importMap.imports[assetsDir] = assetsUrl;
+  // Cache for raw text content
+  const rawContent = {}; // fileName -> string
+
+  async function loadRawContent(chunk) {
+    if (rawContent[chunk.fileName]) return rawContent[chunk.fileName];
+
+    let blob = await getBlobFromCOS(chunk.hash);
+    if (!blob) {
+      console.log(`COS Loader: ${chunk.file} not in COS, fetching...`);
+      try {
+        const resp = await fetch(chunk.file);
+        if (!resp.ok) throw new Error(`Status ${resp.status}`);
+        blob = await resp.blob();
+        storeBlobInCOS(blob, chunk.hash);
+      } catch (e) {
+        console.error(`COS Loader: Failed to fetch ${chunk.file}`, e);
+        return null;
+      }
     }
-
-    await Promise.all(
-      chunksToLoad.map(async (chunk) => {
-        let url = null;
-
-        const cosBlob = await getBlobFromCOS(chunk.hash);
-        if (cosBlob) {
-          console.log(`COS Loader: Loaded ${chunk.file} from COS!`);
-          url = URL.createObjectURL(
-            new Blob([cosBlob], { type: 'text/javascript' })
-          );
-        } else {
-          console.log(`COS Loader: ${chunk.file} not in COS, fetching...`);
-          try {
-            const response = await fetch(chunk.file);
-            if (response.ok) {
-              const blob = await response.blob();
-              url = URL.createObjectURL(
-                new Blob([blob], { type: 'text/javascript' })
-              );
-              // Store in COS for next time
-              storeBlobInCOS(blob, chunk.hash);
-            } else {
-              console.error(
-                `COS Loader: Fetch failed with status ${response.status}`
-              );
-            }
-          } catch (e) {
-            console.error(
-              `COS Loader: Network fetch failed for ${chunk.file}`,
-              e
-            );
-          }
-        }
-
-        if (url) {
-          // Use a Data URL shim to decouple the import graph.
-          // This ensures that the circular dependency between React and React-DOM
-          // doesn't cause a lockout/deadlock during the module graph instantiation.
-          const shim = `export * from "${url}";${chunk.hasDefault ? `export { default } from "${url}";` : ''}`;
-          const shimUrl = `data:text/javascript;base64,${btoa(shim)}`;
-
-          // Map the hardcoded absolute URL to the shim
-          importMap.imports[`http://localhost:5001${chunk.file}`] = shimUrl;
-
-          // Also set global if anyone still needs it (legacy)
-          if (chunk.globalVar) {
-            window[chunk.globalVar] = url;
-          }
-        }
-      })
-    );
-
-    // Inject the importmap
-    if (Object.keys(importMap.imports).length > 0) {
-      const imScript = document.createElement('script');
-      imScript.type = 'importmap';
-      imScript.textContent = JSON.stringify(importMap);
-      document.head.appendChild(imScript);
-    }
+    const text = await blob.text();
+    rawContent[chunk.fileName] = text;
+    return text;
   }
 
-  // Start App
+  async function resolveChunk(fileName) {
+    if (resolvedUrls[fileName]) return resolvedUrls[fileName];
+    if (processing.has(fileName)) {
+      console.warn(`COS Loader: Circular dependency detected for ${fileName}. Breaking cycle with placeholder (may fail).`);
+      // We cannot solve cycles with Direct Data Injection easily. 
+      // Returning null might cause failure, but we hope merging chunks avoided this.
+      return null; 
+    }
+
+    processing.add(fileName);
+    const chunk = chunksByFileName[fileName];
+    if (!chunk) {
+      // Unmanaged dependency? Should have been handled by absolute/base logic but we reverted to ./
+      // If it's ./unmanaged.js, we don't have it in manifest.
+      // We can't inject it.
+      console.warn(`COS Loader: Unknown dependency ${fileName}`);
+      return null;
+    }
+
+    let code = await loadRawContent(chunk);
+    if (!code) return null;
+
+    // Find dependencies in the code: import ... from "./dep.js"
+    // Regex matches the one used in build: `from "./..."`
+    const depRegex = /from\s+['"]\.\/([^'"]+)['"]/g;
+    let match;
+    const deps = new Set();
+    while ((match = depRegex.exec(code)) !== null) {
+      deps.add(match[1]); // The filename relative to current
+    }
+
+    // Resolve dependencies recursively
+    const replacements = [];
+    for (const depName of deps) {
+      const res = await resolveChunk(depName);
+      if (res && res.shimUrl) {
+        replacements.push({ depName, url: res.shimUrl });
+      }
+    }
+
+    // Replace in code
+    for (const { depName, url } of replacements) {
+      // Replace ALL occurrences
+      // We need to be careful with regex replacement safer:
+      // Replace `from "./depName"` with `from "url"`
+      code = code.split(`from "./${depName}"`).join(`from "${url}"`);
+      code = code.split(`from './${depName}'`).join(`from "${url}"`);
+
+      // Also dynamic imports: import("./depName")
+      code = code.split(`import("./${depName}")`).join(`import("${url}")`);
+      code = code.split(`import('./${depName}')`).join(`import("${url}")`);
+    }
+
+    const blob = new Blob([code], { type: 'text/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    // Create Shim
+    const shim = `export * from "${blobUrl}";${chunk.hasDefault ? `export { default } from "${blobUrl}";` : ''}`;
+    const shimUrl = `data:text/javascript;base64,${btoa(shim)}`;
+
+    resolvedUrls[fileName] = { blobUrl, shimUrl };
+    processing.delete(fileName);
+    return resolvedUrls[fileName];
+  }
+
+  // Initialize
   try {
     console.log('COS Loader: Starting app...');
-    // Ensure the importmap is registered before importing
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await import(mainEntry.file);
+    // Resolve main entry
+    const entryFileName = mainEntry.fileName;
+    // We assume mainEntry doesn't need to be shimmed for ITSELF, but its deps do.
+    // Actually resolveChunk returns the shimUrl.
+    const res = await resolveChunk(entryFileName);
+
+    if (res) {
+      // Import the SHIM of the main entry
+      await import(res.shimUrl);
+    } else {
+      console.error('COS Loader: Failed to resolve main entry');
+    }
   } catch (err) {
     console.error('COS Loader: Failed to start app', err);
   }
