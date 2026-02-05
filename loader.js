@@ -106,10 +106,14 @@
         }
 
         if (url) {
-          // Map the bare specifier and absolute path directly to the Blob URL.
-          // This avoids the indirection of a Data URL shim and handles cycles naturally.
-          importMap.imports[chunk.fileName] = url;
-          importMap.imports[chunk.file] = url;
+          // Use a Data URL shim to decouple the import graph.
+          // This ensures that the circular dependency between React and React-DOM
+          // doesn't cause a lockout/deadlock during the module graph instantiation.
+          const shim = `export * from "${url}";${chunk.hasDefault ? `export { default } from "${url}";` : ''}`;
+          const shimUrl = `data:text/javascript;base64,${btoa(shim)}`;
+
+          importMap.imports[chunk.fileName] = shimUrl;
+          importMap.imports[chunk.file] = shimUrl;
 
           // Also set global if anyone still needs it (legacy)
           if (chunk.globalVar) {
