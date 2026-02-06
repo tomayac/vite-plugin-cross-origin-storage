@@ -89,6 +89,13 @@
 
     // Resolve all chunks to Data URLs
     const importMap = { imports: {} };
+
+    // Set up unmanaged dependencies correctly so Data URLs can resolve them.
+    for (const fileName of manifest.unmanaged || []) {
+      const bareSpecifier = `coschunk-${fileName.replace(/\//g, '-')}`;
+      importMap.imports[bareSpecifier] = window.location.origin + base + fileName;
+    }
+
     console.log(`COS Loader: Loading ${chunksToLoad.length} chunks...`);
     const loadPromises = chunksToLoad.map(async (chunk) => {
       const dataUrl = await getChunkDataUrl(chunk);

@@ -1,3 +1,3 @@
-import { setupCounter } from './counter.js';
+import { a } from './a.js';
 
-setupCounter(document.querySelector('#counter'));
+a();

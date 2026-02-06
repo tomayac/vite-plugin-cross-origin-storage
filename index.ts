@@ -21,7 +21,9 @@ export interface CosPluginOptions {
 }
 
 export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
-  const filter = createFilter(options.include || ['**/*'], options.exclude);
+  const filter = (options.include || options.exclude)
+    ? createFilter(options.include || ['**/*'], options.exclude, { resolve: false })
+    : () => true;
 
   // Resolve loader path relative to this file
   // When built, this file is in dist/index.js, but loader.js is in the root
@@ -62,9 +64,10 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             mainChunk = chunk;
           } else {
             // Apply filter to determine if this chunk should be managed by COS
-            const res = filter(fileName);
+            // Check against both the full fileName and the chunk name for better usability
+            const res = filter(fileName) || filter(chunk.name);
             console.log(
-              `COS Plugin: [FILTER] ${fileName} -> ${res ? 'INCLUDE' : 'SKIP'}`
+              `COS Plugin: [FILTER] ${fileName} (name: ${chunk.name}) -> ${res ? 'INCLUDE' : 'SKIP'}`
             );
             if (res) {
               managedChunks[fileName] = chunk;
@@ -83,6 +86,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         );
 
         const managedChunkNames = new Set(Object.keys(managedChunks));
+        const unmanagedDependencies = new Set<string>();
 
         const base = config.base.endsWith('/')
           ? config.base
@@ -122,12 +126,9 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
               const staticPattern = `(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${escapedRelPath}['"]\\s*;?`;
               const staticRegex = new RegExp(staticPattern, 'g');
 
-              targetChunk.code = targetChunk.code.replace(
-                staticRegex,
-                (match, keyword, fromPart) => {
-                  return `${keyword}${fromPart ? ' ' + fromPart : ' '}"${bareSpecifier}";`;
-                }
-              );
+              targetChunk.code = targetChunk.code.replace(staticRegex, (match, keyword, fromPart) => {
+                return `${keyword}${fromPart ? ' ' + fromPart : ' '}"${bareSpecifier}";`;
+              });
 
               // 2. Dynamic imports: import("./path")
               const dynamicPattern = `import\\s*\\(\\s*['"]${escapedRelPath}['"]\\s*\\)`;
@@ -136,9 +137,18 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
                 dynamicRegex,
                 () => `import("${bareSpecifier}")`
               );
+
+              if (!isDepManaged) {
+                unmanagedDependencies.add(depFileName);
+              }
             }
           }
         }
+
+        // Step 2: Ensure managed chunks can resolve unmanaged chunks they depend on.
+        // Managed chunks run as Data URLs, so they can't resolve root-relative paths.
+        // We include these unmanaged dependencies in the manifest so the loader can
+        // add them to the import map with fully qualified URLs.
 
         // Step 3: Calculate final hashes and build manifest for MANAGED chunks only.
         const manifest: Record<string, any> = {
@@ -156,6 +166,8 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
 
           manifest.chunks[fileName] = finalHash;
         }
+
+        manifest.unmanaged = Array.from(unmanagedDependencies);
 
         // Inject loader and inlined manifest into index.html
         if (htmlAsset) {

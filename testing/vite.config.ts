@@ -2,13 +2,16 @@ import { defineConfig } from 'vite';
 import vitePluginCrossOriginStorage from '../dist/index.js';
 
 export default defineConfig({
-  plugins: [vitePluginCrossOriginStorage()],
+  plugins: [vitePluginCrossOriginStorage({
+    include: ['a'],
+    exclude: ['b'],
+  })],
   build: {
     rollupOptions: {
       output: {
         manualChunks: {
-          counter: [new URL('./counter.js', import.meta.url).pathname],
-          constants: [new URL('./constants.js', import.meta.url).pathname],
+          a: [new URL('./a.js', import.meta.url).pathname],
+          b: [new URL('./b.js', import.meta.url).pathname],
         },
       },
     },
