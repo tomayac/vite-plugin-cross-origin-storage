@@ -99,14 +99,18 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           const isTargetManaged = managedChunkNames.has(targetChunk.fileName);
           const importerDir = path.dirname(targetChunk.fileName);
 
-          for (const depFileName in bundle) {
+          // Get all direct dependencies of this chunk
+          const deps = [...targetChunk.imports, ...targetChunk.dynamicImports];
+
+          for (const depFileName of deps) {
             const depChunk = bundle[depFileName];
             if (!depChunk || depChunk.type !== 'chunk') continue;
 
             const isDepManaged = managedChunkNames.has(depFileName);
 
-            // ONLY rewrite if the importer is a blob OR the dependency is a blob.
-            // Relative imports between unmanaged chunks are left untouched.
+            // ONLY rewrite if the importer is managed OR the dependency is managed.
+            // If the importer is a blob, it MUST use bare specifiers for everything.
+            // If the dependency is a blob, everyone MUST use bare specifiers to access it.
             if (isTargetManaged || isDepManaged) {
               let relPath = path.relative(importerDir, depFileName);
               if (!relPath.startsWith('.')) relPath = './' + relPath;
@@ -116,13 +120,9 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
               );
 
               // Truly Bare specifier for Import Map mapping.
-              // We replace all slashes with hyphens to ensure the browser NEVER
-              // treats this as a URL-like specifier or a protocol scheme.
               const bareSpecifier = `coschunk-${depFileName.replace(/\//g, '-')}`;
 
               // 1. Static imports/exports: (import|export) ... from "./path"
-              // Uses a negative lookahead to ensure we don't match across multiple statements.
-              // We use \b and \s* to handle minified code where spaces may be missing (e.g., import{...}from"./...").
               const staticPattern = `(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${escapedRelPath}['"]\\s*;?`;
               const staticRegex = new RegExp(staticPattern, 'g');
 

@@ -75,12 +75,10 @@
       }
     }
 
-    // Convert blob to Data URL
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.readAsDataURL(blob);
-    });
+    // Convert blob to Blob URL
+    // Blob URLs are synchronous and share the page origin,
+    // which helps with module resolution in complex graphs.
+    return URL.createObjectURL(blob);
   }
 
   // Initialize
@@ -119,8 +117,15 @@
 
     // Import the main entry.
     const entryUrl = `${base}${mainEntry}`;
-    await import(entryUrl);
+
+    // Small delay to ensure the browser has fully registered the 
+    // import map before resolving the first module.
+    setTimeout(() => {
+      import(entryUrl).catch((err) => {
+        console.error('COS Loader: Failed to start app', err);
+      });
+    }, 0);
   } catch (err) {
-    console.error('COS Loader: Failed to start app', err);
+    console.error('COS Loader: Initialization failed', err);
   }
 })();
