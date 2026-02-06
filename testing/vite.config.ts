@@ -2,10 +2,12 @@ import { defineConfig } from 'vite';
 import vitePluginCrossOriginStorage from '../dist/index.js';
 
 export default defineConfig({
-  plugins: [vitePluginCrossOriginStorage({
-    include: ['a'],
-    exclude: ['b'],
-  })],
+  plugins: [
+    vitePluginCrossOriginStorage({
+      include: ['a'],
+      exclude: ['b'],
+    }),
+  ],
   build: {
     rollupOptions: {
       output: {

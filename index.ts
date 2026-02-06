@@ -21,9 +21,12 @@ export interface CosPluginOptions {
 }
 
 export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
-  const filter = (options.include || options.exclude)
-    ? createFilter(options.include || ['**/*'], options.exclude, { resolve: false })
-    : () => true;
+  const filter =
+    options.include || options.exclude
+      ? createFilter(options.include || ['**/*'], options.exclude, {
+          resolve: false,
+        })
+      : () => true;
 
   // Resolve loader path relative to this file
   // When built, this file is in dist/index.js, but loader.js is in the root
@@ -62,6 +65,9 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           if (chunk.isEntry) {
             console.log(`COS Plugin: [ENTRY] ${fileName}`);
             mainChunk = chunk;
+            // The entry point MUST be treated as managed to ensure its internal
+            // imports are rewritten to bare specifiers.
+            managedChunks[fileName] = chunk;
           } else {
             // Apply filter to determine if this chunk should be managed by COS
             // Check against both the full fileName and the chunk name for better usability
@@ -93,10 +99,10 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           : config.base + '/';
 
         // Step 1: Rewrite imports to use bare specifiers where required.
-        // We only MUST rewrite imports that originate from a managed chunk (as they run in a Blob URL)
-        // or that target a managed chunk (to redirect to the COS shim).
+        // We rewrite ALL imports that target a chunk in the bundle.
+        // This ensures that even if a chunk isn't "managed" (stored in COS),
+        // it can still be resolved by managed chunks (which run in Blob URLs).
         for (const targetChunk of allChunks) {
-          const isTargetManaged = managedChunkNames.has(targetChunk.fileName);
           const importerDir = path.dirname(targetChunk.fileName);
 
           // Get all direct dependencies of this chunk
@@ -108,39 +114,37 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
 
             const isDepManaged = managedChunkNames.has(depFileName);
 
-            // ONLY rewrite if the importer is managed OR the dependency is managed.
-            // If the importer is a blob, it MUST use bare specifiers for everything.
-            // If the dependency is a blob, everyone MUST use bare specifiers to access it.
-            if (isTargetManaged || isDepManaged) {
-              let relPath = path.relative(importerDir, depFileName);
-              if (!relPath.startsWith('.')) relPath = './' + relPath;
-              const escapedRelPath = relPath.replace(
-                /[.*+?^${}()|[\]\\]/g,
-                '\\$&'
-              );
+            let relPath = path.relative(importerDir, depFileName);
+            if (!relPath.startsWith('.')) relPath = './' + relPath;
+            const escapedRelPath = relPath.replace(
+              /[.*+?^${}()|[\]\\]/g,
+              '\\$&'
+            );
 
-              // Truly Bare specifier for Import Map mapping.
-              const bareSpecifier = `coschunk-${depFileName.replace(/\//g, '-')}`;
+            // Truly Bare specifier for Import Map mapping.
+            const bareSpecifier = `coschunk-${depFileName.replace(/\//g, '-')}`;
 
-              // 1. Static imports/exports: (import|export) ... from "./path"
-              const staticPattern = `(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${escapedRelPath}['"]\\s*;?`;
-              const staticRegex = new RegExp(staticPattern, 'g');
+            // 1. Static imports/exports: (import|export) ... from "./path"
+            const staticPattern = `(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${escapedRelPath}['"]\\s*;?`;
+            const staticRegex = new RegExp(staticPattern, 'g');
 
-              targetChunk.code = targetChunk.code.replace(staticRegex, (match, keyword, fromPart) => {
+            targetChunk.code = targetChunk.code.replace(
+              staticRegex,
+              (match, keyword, fromPart) => {
                 return `${keyword}${fromPart ? ' ' + fromPart : ' '}"${bareSpecifier}";`;
-              });
-
-              // 2. Dynamic imports: import("./path")
-              const dynamicPattern = `import\\s*\\(\\s*['"]${escapedRelPath}['"]\\s*\\)`;
-              const dynamicRegex = new RegExp(dynamicPattern, 'g');
-              targetChunk.code = targetChunk.code.replace(
-                dynamicRegex,
-                () => `import("${bareSpecifier}")`
-              );
-
-              if (!isDepManaged) {
-                unmanagedDependencies.add(depFileName);
               }
+            );
+
+            // 2. Dynamic imports: import("./path")
+            const dynamicPattern = `import\\s*\\(\\s*['"]${escapedRelPath}['"]\\s*\\)`;
+            const dynamicRegex = new RegExp(dynamicPattern, 'g');
+            targetChunk.code = targetChunk.code.replace(
+              dynamicRegex,
+              () => `import("${bareSpecifier}")`
+            );
+
+            if (!isDepManaged) {
+              unmanagedDependencies.add(depFileName);
             }
           }
         }

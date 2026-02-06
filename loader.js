@@ -91,7 +91,8 @@
     // Set up unmanaged dependencies correctly so Data URLs can resolve them.
     for (const fileName of manifest.unmanaged || []) {
       const bareSpecifier = `coschunk-${fileName.replace(/\//g, '-')}`;
-      importMap.imports[bareSpecifier] = window.location.origin + base + fileName;
+      importMap.imports[bareSpecifier] =
+        window.location.origin + base + fileName;
     }
 
     console.log(`COS Loader: Loading ${chunksToLoad.length} chunks...`);
@@ -115,13 +116,14 @@
 
     console.log('COS Loader: Import Map injected');
 
-    // Import the main entry.
-    const entryUrl = `${base}${mainEntry}`;
+    // Import the main entry via its bare specifier to ensure it resolves
+    // through the import map and can find other managed chunks.
+    const entrySpecifier = `coschunk-${mainEntry.replace(/\//g, '-')}`;
 
-    // Small delay to ensure the browser has fully registered the 
+    // Small delay to ensure the browser has fully registered the
     // import map before resolving the first module.
     setTimeout(() => {
-      import(entryUrl).catch((err) => {
+      import(entrySpecifier).catch((err) => {
         console.error('COS Loader: Failed to start app', err);
       });
     }, 0);
