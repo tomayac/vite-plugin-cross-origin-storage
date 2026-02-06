@@ -55,7 +55,7 @@
     }
   }
 
-  async function getChunkDataUrl(chunk) {
+  async function getChunkBlobUrl(chunk) {
     let blob = await getBlobFromCOS(chunk.hash);
     if (blob) {
       console.log(`COS Loader: ${chunk.fileName} found in COS`);
@@ -85,10 +85,10 @@
   try {
     console.log('COS Loader: Starting app...');
 
-    // Resolve all chunks to Data URLs
+    // Resolve all chunks to Blob URLs
     const importMap = { imports: {} };
 
-    // Set up unmanaged dependencies correctly so Data URLs can resolve them.
+    // Set up unmanaged dependencies correctly so Blob URLs can resolve them.
     for (const fileName of manifest.unmanaged || []) {
       const bareSpecifier = `coschunk-${fileName.replace(/\//g, '-')}`;
       importMap.imports[bareSpecifier] =
@@ -97,12 +97,12 @@
 
     console.log(`COS Loader: Loading ${chunksToLoad.length} chunks...`);
     const loadPromises = chunksToLoad.map(async (chunk) => {
-      const dataUrl = await getChunkDataUrl(chunk);
-      if (dataUrl) {
+      const blobUrl = await getChunkBlobUrl(chunk);
+      if (blobUrl) {
         // Use a hyphenated prefix and replace all slashes to ensure it's treated
         // as a truly bare specifier, bypassing hierarchical/protocol checks.
         const bareSpecifier = `coschunk-${chunk.fileName.replace(/\//g, '-')}`;
-        importMap.imports[bareSpecifier] = dataUrl;
+        importMap.imports[bareSpecifier] = blobUrl;
       }
     });
 

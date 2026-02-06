@@ -65,19 +65,18 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           if (chunk.isEntry) {
             console.log(`COS Plugin: [ENTRY] ${fileName}`);
             mainChunk = chunk;
-            // The entry point MUST be treated as managed to ensure its internal
-            // imports are rewritten to bare specifiers.
+          }
+
+          // Apply filter to determine if this chunk should be managed by COS
+          // Check against both the full fileName and the chunk name for better usability
+          const res = filter(fileName) || filter(chunk.name);
+          console.log(
+            `COS Plugin: [FILTER] ${fileName} (name: ${chunk.name}) -> ${
+              res ? 'INCLUDE' : 'SKIP'
+            }`
+          );
+          if (res) {
             managedChunks[fileName] = chunk;
-          } else {
-            // Apply filter to determine if this chunk should be managed by COS
-            // Check against both the full fileName and the chunk name for better usability
-            const res = filter(fileName) || filter(chunk.name);
-            console.log(
-              `COS Plugin: [FILTER] ${fileName} (name: ${chunk.name}) -> ${res ? 'INCLUDE' : 'SKIP'}`
-            );
-            if (res) {
-              managedChunks[fileName] = chunk;
-            }
           }
         }
         if (fileName === 'index.html' && chunk.type === 'asset') {
@@ -150,7 +149,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         }
 
         // Step 2: Ensure managed chunks can resolve unmanaged chunks they depend on.
-        // Managed chunks run as Data URLs, so they can't resolve root-relative paths.
+        // Managed chunks run as Blob URLs, so they can't resolve root-relative paths.
         // We include these unmanaged dependencies in the manifest so the loader can
         // add them to the import map with fully qualified URLs.
 
@@ -169,6 +168,10 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             .digest('hex');
 
           manifest.chunks[fileName] = finalHash;
+        }
+
+        if (mainChunk && !managedChunkNames.has(mainChunk.fileName)) {
+          unmanagedDependencies.add(mainChunk.fileName);
         }
 
         manifest.unmanaged = Array.from(unmanagedDependencies);
