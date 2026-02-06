@@ -6,14 +6,20 @@
   // @ts-ignore
   const manifest = __COS_MANIFEST__;
 
-  const mainEntry = manifest && manifest['index'];
+  const { base, entry, chunks } = manifest;
+  const mainEntry = entry;
+
   if (!mainEntry) {
-    console.warn('COS Loader: Missing main entry in manifest.');
+    console.warn('COS Loader: Missing entry in manifest.');
     return;
   }
 
-  // Identify managed chunks (anything with a hash)
-  const chunksToLoad = Object.values(manifest).filter((item) => item.hash);
+  // Identify managed chunks
+  const chunksToLoad = Object.entries(chunks || {}).map(([fileName, hash]) => ({
+    fileName,
+    hash,
+    file: `${base}${fileName}`,
+  }));
 
   async function getBlobFromCOS(hash) {
     if (!isCOSAvailable) return null;
@@ -51,12 +57,17 @@
 
   async function getChunkDataUrl(chunk) {
     let blob = await getBlobFromCOS(chunk.hash);
+    if (blob) {
+      console.log(`COS Loader: ${chunk.fileName} found in COS`);
+      blob = new Blob([blob], { type: 'text/javascript' });
+    }
     if (!blob) {
       console.log(`COS Loader: ${chunk.file} not in COS, fetching...`);
       try {
         const resp = await fetch(chunk.file);
         if (!resp.ok) throw new Error(`Status ${resp.status}`);
-        blob = await resp.blob();
+        const rawBlob = await resp.blob();
+        blob = new Blob([rawBlob], { type: 'text/javascript' });
         await storeBlobInCOS(blob, chunk.hash);
       } catch (e) {
         console.error(`COS Loader: Failed to fetch ${chunk.file}`, e);
@@ -78,6 +89,7 @@
 
     // Resolve all chunks to Data URLs
     const importMap = { imports: {} };
+    console.log(`COS Loader: Loading ${chunksToLoad.length} chunks...`);
     const loadPromises = chunksToLoad.map(async (chunk) => {
       const dataUrl = await getChunkDataUrl(chunk);
       if (dataUrl) {
@@ -93,18 +105,14 @@
     // Inject Import Map
     const script = document.createElement('script');
     script.type = 'importmap';
-    script.textContent = JSON.stringify(importMap);
+    script.textContent = JSON.stringify(importMap, null, 2);
     document.head.appendChild(script);
 
     console.log('COS Loader: Import Map injected');
 
     // Import the main entry.
-    // If the entry itself were managed, we would use cos-chunk: prefix here too.
-    // For now, it's loaded via its absolute path from the server,
-    // and its internal imports (rewritten by the plugin) will use cos-chunk:
-    const entryUrl = mainEntry.file;
+    const entryUrl = `${base}${mainEntry}`;
     await import(entryUrl);
-
   } catch (err) {
     console.error('COS Loader: Failed to start app', err);
   }

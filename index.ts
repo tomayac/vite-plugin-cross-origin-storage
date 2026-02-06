@@ -88,24 +88,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           ? config.base
           : config.base + '/';
 
-        // Step 1: Assign stable global variables to managed chunks
-        const managedChunkInfo: Record<
-          string,
-          { globalVar: string; chunk: OutputChunk }
-        > = {};
-        for (const fileName in managedChunks) {
-          const nameHash = crypto
-            .createHash('sha256')
-            .update(fileName)
-            .digest('hex')
-            .substring(0, 8);
-          managedChunkInfo[fileName] = {
-            globalVar: `__COS_CHUNK_${nameHash}__`,
-            chunk: managedChunks[fileName],
-          };
-        }
-
-        // Step 2: Rewrite imports to use bare specifiers where required.
+        // Step 1: Rewrite imports to use bare specifiers where required.
         // We only MUST rewrite imports that originate from a managed chunk (as they run in a Blob URL)
         // or that target a managed chunk (to redirect to the COS shim).
         for (const targetChunk of allChunks) {
@@ -157,33 +140,22 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           }
         }
 
-        // Step 4: Calculate final hashes and build manifest for MANAGED chunks only.
-        const manifest: Record<string, any> = {};
+        // Step 3: Calculate final hashes and build manifest for MANAGED chunks only.
+        const manifest: Record<string, any> = {
+          base,
+          entry: mainChunk.fileName,
+          chunks: {},
+        };
 
-        for (const fileName in managedChunkInfo) {
-          const { chunk, globalVar } = managedChunkInfo[fileName];
+        for (const fileName in managedChunks) {
+          const chunk = managedChunks[fileName];
           const finalHash = crypto
             .createHash('sha256')
             .update(chunk.code)
             .digest('hex');
 
-          // Detect if the chunk has a default export using Rollup's reliable metadata
-          const hasDefault = chunk.exports.includes('default');
-
-          manifest[fileName] = {
-            fileName: fileName,
-            file: `${base}${fileName}`,
-            hash: finalHash,
-            globalVar: globalVar,
-            hasDefault,
-          };
+          manifest.chunks[fileName] = finalHash;
         }
-
-        const entryFileName = mainChunk.fileName;
-        manifest['index'] = {
-          fileName: entryFileName,
-          file: `${base}${entryFileName}`,
-        };
 
         // Inject loader and inlined manifest into index.html
         if (htmlAsset) {
@@ -191,7 +163,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             let loaderCode = fs.readFileSync(loaderPath, 'utf-8');
             loaderCode = loaderCode.replace(
               '__COS_MANIFEST__',
-              JSON.stringify(manifest)
+              JSON.stringify(manifest, null, 2)
             );
 
             let htmlSource = htmlAsset.source as string;
