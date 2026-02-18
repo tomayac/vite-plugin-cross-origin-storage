@@ -111,18 +111,6 @@
     // Inject Import Map
     const script = document.createElement('script');
     script.type = 'importmap';
-
-    // Add magic specifier mappings (e.g. coschunk-three -> assets/three-*.js)
-    if (manifest.magic) {
-      for (const [specifier, fileName] of Object.entries(manifest.magic)) {
-        const targetSpecifier = `coschunk-${fileName.replace(/\//g, '-')}`;
-        const targetUrl = importMap.imports[targetSpecifier];
-        if (targetUrl) {
-          importMap.imports[specifier] = targetUrl;
-        }
-      }
-    }
-
     script.textContent = JSON.stringify(importMap, null, 2);
     document.head.appendChild(script);
 
