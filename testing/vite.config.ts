@@ -4,7 +4,7 @@ import vitePluginCrossOriginStorage from '../dist/index.js';
 export default defineConfig({
   plugins: [
     vitePluginCrossOriginStorage({
-      include: ['a'],
+      include: ['a', 'vendor-three'],
       exclude: ['b'],
     }),
   ],
