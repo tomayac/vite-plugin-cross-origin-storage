@@ -73,15 +73,14 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           try {
             // Check if it's an installed package
             require.resolve(pkgName);
-            // Externalize the package and its subpaths to prevent Vite from bundling parts of it
-            const externalPatterns = [pkgName, `${pkgName}/*`];
-            for (const pattern of externalPatterns) {
-              if (!externalArray.includes(pattern)) {
-                console.log(
-                  `COS Plugin: [MAGIC] Externalizing pattern "${pattern}" (matched from ${item})`
-                );
-                externalArray.push(pattern);
-              }
+            // Externalize the package and all its subpaths using a RegExp
+            // This robustly prevents Vite from bundling any part of the package
+            const pkgRegex = new RegExp(`^${pkgName}(?:/.*)?$`);
+            if (!externalArray.some(e => e instanceof RegExp && e.source === pkgRegex.source)) {
+              console.log(
+                `COS Plugin: [MAGIC] Externalizing package and subpaths: ${pkgRegex} (matched from ${item})`
+              );
+              externalArray.push(pkgRegex);
             }
           } catch (e) {
             // Not a package, ignore
@@ -154,47 +153,43 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         return null;
       }
 
-      // Handle Magic externals
+      // 1. Identify Magic Packages
+      const magicPackages = new Set<string>();
       for (const item of includeArray) {
         const pkgName = getPackageName(item);
-        if (!pkgName) continue;
-
-        try {
-          let pkgPath = '';
+        if (pkgName) {
           try {
-            // Try to find package.json relative to the resolved entry point
-            // This avoids issues with non-exported package.json
-            const mainPath = require.resolve(pkgName);
-            let currentDir = path.dirname(mainPath);
-            let pkgJsonPath = '';
-            while (currentDir !== path.parse(currentDir).root) {
-              const candidate = path.join(currentDir, 'package.json');
-              if (fs.existsSync(candidate)) {
-                pkgJsonPath = candidate;
-                break;
-              }
-              currentDir = path.dirname(currentDir);
-            }
-
-            if (pkgJsonPath) {
-              const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
-              const pkgDir = path.dirname(pkgJsonPath);
-
-              if (pkgJson.module) {
-                pkgPath = path.resolve(pkgDir, pkgJson.module);
-              } else if (pkgJson.exports?.['.']?.import) {
-                pkgPath = path.resolve(pkgDir, pkgJson.exports['.'].import);
-              } else if (pkgJson.exports?.import) {
-                pkgPath = path.resolve(pkgDir, pkgJson.exports.import);
-              }
-            }
-
-            if (!pkgPath) {
-              pkgPath = mainPath;
-            }
+            require.resolve(pkgName);
+            magicPackages.add(pkgName);
           } catch (e) {
-            pkgPath = require.resolve(pkgName);
+            // Not a package, ignore
           }
+        }
+      }
+
+      // 2. Discover all used specifiers for these packages
+      const discoveredSpecifiers = new Set<string>();
+      const allChunks = Object.values(bundle).filter(
+        (c): c is OutputChunk => c.type === 'chunk'
+      );
+
+      for (const chunk of allChunks) {
+        const allImports = [...chunk.imports, ...chunk.dynamicImports];
+        for (const specifier of allImports) {
+          // Check if the specifier belongs to a magic package
+          for (const pkgName of magicPackages) {
+            if (specifier === pkgName || specifier.startsWith(`${pkgName}/`)) {
+              discoveredSpecifiers.add(specifier);
+              break;
+            }
+          }
+        }
+      }
+
+      // 3. Bundle each discovered specifier as a shared asset
+      for (const specifier of discoveredSpecifiers) {
+        try {
+          const pkgPath = require.resolve(specifier);
 
           // Load esbuild via require for better ESM/CJS interop
           const esbuildRequire = createRequire(import.meta.url);
@@ -221,11 +216,13 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             .update(content)
             .digest('hex');
 
-          // Emit the file so it's placed in the assets directory
-          const ext = path.extname(pkgPath);
+          // Always use .js extension as we bundle everything into ESM
+          const ext = '.js';
+          // Sanitize specifier for filename
+          const safeSpecifier = specifier.replace(/[/@]/g, '-').replace(/\.js$/, '');
           const fileName = path.join(
             config.build.assetsDir,
-            `${pkgName}-${hash.slice(0, 8)}${ext}`
+            `${safeSpecifier}-${hash.slice(0, 8)}${ext}`
           );
 
           this.emitFile({
@@ -239,22 +236,17 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             type: 'chunk',
             fileName,
             code: content.toString(),
-            name: item,
+            name: specifier,
           } as any;
 
           // Mapping for import rewriting
-          externalToFileName[pkgName] = fileName;
+          externalToFileName[specifier] = fileName;
         } catch (e) {
-          // Not a magic package or couldn't resolve
+          console.error(`COS Plugin: Failed to bundle magic specifier "${specifier}"`, e);
         }
       }
 
       if (mainChunk) {
-        // Collect ALL chunks to rewrite imports in them
-        const allChunks = Object.values(bundle).filter(
-          (c): c is OutputChunk => c.type === 'chunk'
-        );
-
         const managedChunkNames = new Set(Object.keys(managedChunks));
         const unmanagedDependencies = new Set<string>();
 
