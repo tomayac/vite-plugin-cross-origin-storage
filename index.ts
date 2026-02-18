@@ -186,37 +186,67 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         }
       }
 
-      // 3. Bundle each discovered specifier as a shared asset
+      // 3. Bundle each discovered specifier as an atomic asset
+      const specifierToCode: Record<string, string> = {};
+
       for (const specifier of discoveredSpecifiers) {
         try {
           const pkgPath = require.resolve(specifier);
+
+          // Find other discovered specifiers from the SAME package to mark as external in esbuild
+          const pkgName = Array.from(magicPackages).find(p => specifier === p || specifier.startsWith(`${p}/`))!;
+          const otherSpecifiersFromSamePkg = Array.from(discoveredSpecifiers).filter(
+            s => s !== specifier && (s === pkgName || s.startsWith(`${pkgName}/`))
+          );
 
           // Load esbuild via require for better ESM/CJS interop
           const esbuildRequire = createRequire(import.meta.url);
           const esbuild = esbuildRequire('esbuild');
 
-          // Use esbuild to create a single self-contained ESM bundle
+          // Use esbuild to create an atomic bundle
           const buildResult = await esbuild.build({
             entryPoints: [pkgPath],
             bundle: true,
             format: 'esm',
             minify: true,
             platform: 'browser',
-            write: false, // Don't write to disk
+            write: false,
             target: 'esnext',
-            // Neutralize environment
+            // Mark other components of the same library as external to avoid duplication
+            external: otherSpecifiersFromSamePkg,
             define: {
               'process.env.NODE_ENV': '"production"',
             },
           });
 
-          const content = buildResult.outputFiles[0].contents;
+          let code = buildResult.outputFiles[0].text;
+
+          // INTER-REWRITING: Ensure code correctly references OTHER shared magic assets
+          // We rewrite imports to use bare specifiers where required.
+          for (const otherSpec of otherSpecifiersFromSamePkg) {
+            const escapedOtherSpec = otherSpec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const bareSpecifier = `coschunk-${otherSpec.replace(/[/@]/g, '-')}`;
+
+            // Static imports
+            const staticRegex = new RegExp(`(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${escapedOtherSpec}['"]\\s*;?`, 'g');
+            code = code.replace(staticRegex, (match, keyword, fromPart) => {
+              return `${keyword}${fromPart ? ' ' + fromPart : ' '}"${bareSpecifier}";`;
+            });
+
+            // Dynamic imports
+            const dynamicRegex = new RegExp(`import\\s*\\(\\s*['"]${escapedOtherSpec}['"]\\s*\\)`, 'g');
+            code = code.replace(dynamicRegex, () => `import("${bareSpecifier}")`);
+          }
+
+          specifierToCode[specifier] = code;
+
+          const content = Buffer.from(code);
           const hash = crypto
             .createHash('sha256')
             .update(content)
             .digest('hex');
 
-          // Always use .js extension as we bundle everything into ESM
+          // Always use .js extension
           const ext = '.js';
           // Sanitize specifier for filename
           const safeSpecifier = specifier.replace(/[/@]/g, '-').replace(/\.js$/, '');
@@ -235,11 +265,11 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           managedChunks[fileName] = {
             type: 'chunk',
             fileName,
-            code: content.toString(),
+            code: code,
             name: specifier,
           } as any;
 
-          // Mapping for import rewriting
+          // Mapping for import rewriting in BOTH project chunks and other magic assets
           externalToFileName[specifier] = fileName;
         } catch (e) {
           console.error(`COS Plugin: Failed to bundle magic specifier "${specifier}"`, e);
@@ -247,6 +277,19 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
       }
 
       if (mainChunk) {
+        // Build the magic mapping for the manifest
+        // This maps bare specifiers (like 'coschunk-three') to their hashed filenames
+        const magicMapping: Record<string, string> = {};
+        for (const specifier in externalToFileName) {
+          const bareSpecifier = `coschunk-${specifier.replace(/[/@]/g, '-')}`;
+          magicMapping[bareSpecifier] = externalToFileName[specifier];
+        }
+
+        // Collect ALL chunks to rewrite imports in them
+        const allChunks = Object.values(bundle).filter(
+          (c): c is OutputChunk => c.type === 'chunk'
+        );
+
         const managedChunkNames = new Set(Object.keys(managedChunks));
         const unmanagedDependencies = new Set<string>();
 
@@ -255,9 +298,6 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           : config.base + '/';
 
         // Step 1: Rewrite imports to use bare specifiers where required.
-        // We rewrite ALL imports that target a chunk in the bundle.
-        // This ensures that even if a chunk isn't "managed" (stored in COS),
-        // it can still be resolved by managed chunks (which run in Blob URLs).
         for (const targetChunk of allChunks) {
           const importerDir = path.dirname(targetChunk.fileName);
 
@@ -280,7 +320,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             // Truly Bare specifier for Import Map mapping.
             const bareSpecifier = `coschunk-${depFileName.replace(/\//g, '-')}`;
 
-            // 1. Static imports/exports: (import|export) ... from "./path"
+            // 1. Static imports/exports
             const staticPattern = `(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${escapedRelPath}['"]\\s*;?`;
             const staticRegex = new RegExp(staticPattern, 'g');
 
@@ -291,7 +331,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
               }
             );
 
-            // 2. Dynamic imports: import("./path")
+            // 2. Dynamic imports
             const dynamicPattern = `import\\s*\\(\\s*['"]${escapedRelPath}['"]\\s*\\)`;
             const dynamicRegex = new RegExp(dynamicPattern, 'g');
             targetChunk.code = targetChunk.code.replace(
@@ -306,9 +346,8 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
 
           // Step 1b: Rewrite imports for magic external dependencies
           for (const pkgName in externalToFileName) {
-            // We use the emitted filename for the bare specifier
-            const fileName = externalToFileName[pkgName];
-            const bareSpecifier = `coschunk-${fileName.replace(/\//g, '-')}`;
+            // We use the stable safe specifier format: coschunk-<pkgName>
+            const bareSpecifier = `coschunk-${pkgName.replace(/[/@]/g, '-')}`;
 
             // 1. Static imports/exports
             const staticPattern = `(import|export)\\b\\s*((?:(?!\\bimport\\b|\\bexport\\b)[\\s\\S])*?\\bfrom\\b\\s*)?['"]${pkgName}['"]\\s*;?`;
@@ -331,16 +370,12 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           }
         }
 
-        // Step 2: Ensure managed chunks can resolve unmanaged chunks they depend on.
-        // Managed chunks run as Blob URLs, so they can't resolve root-relative paths.
-        // We include these unmanaged dependencies in the manifest so the loader can
-        // add them to the import map with fully qualified URLs.
-
         // Step 3: Calculate final hashes and build manifest for MANAGED chunks only.
         const manifest: Record<string, any> = {
           base,
           entry: mainChunk.fileName,
           chunks: {},
+          magic: magicMapping,
         };
 
         for (const fileName in managedChunks) {
