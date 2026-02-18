@@ -73,9 +73,15 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           try {
             // Check if it's an installed package
             require.resolve(pkgName);
-            if (!externalArray.includes(pkgName)) {
-              console.log(`COS Plugin: [MAGIC] Externalizing package "${pkgName}" (matched from ${item})`);
-              externalArray.push(pkgName);
+            // Externalize the package and its subpaths to prevent Vite from bundling parts of it
+            const externalPatterns = [pkgName, `${pkgName}/*`];
+            for (const pattern of externalPatterns) {
+              if (!externalArray.includes(pattern)) {
+                console.log(
+                  `COS Plugin: [MAGIC] Externalizing pattern "${pattern}" (matched from ${item})`
+                );
+                externalArray.push(pattern);
+              }
             }
           } catch (e) {
             // Not a package, ignore
@@ -190,9 +196,26 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             pkgPath = require.resolve(pkgName);
           }
 
-          console.log(`COS Plugin: [MAGIC] Resolved ${pkgName} to ${pkgPath}`);
+          // Load esbuild via require for better ESM/CJS interop
+          const esbuildRequire = createRequire(import.meta.url);
+          const esbuild = esbuildRequire('esbuild');
 
-          const content = fs.readFileSync(pkgPath);
+          // Use esbuild to create a single self-contained ESM bundle
+          const buildResult = await esbuild.build({
+            entryPoints: [pkgPath],
+            bundle: true,
+            format: 'esm',
+            minify: true,
+            platform: 'browser',
+            write: false, // Don't write to disk
+            target: 'esnext',
+            // Neutralize environment
+            define: {
+              'process.env.NODE_ENV': '"production"',
+            },
+          });
+
+          const content = buildResult.outputFiles[0].contents;
           const hash = crypto
             .createHash('sha256')
             .update(content)
