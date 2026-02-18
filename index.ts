@@ -53,22 +53,28 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
       const include = options.include || ['**/*'];
       const includeArray = Array.isArray(include) ? include : [include];
 
-      // Use process.cwd() to resolve from the project root
       const require = createRequire(path.join(process.cwd(), 'index.js'));
 
-      for (const item of includeArray) {
+      function getPackageName(item: string | RegExp): string | null {
         if (typeof item === 'string') {
-          // Magic: check if it's a package or vendor-prefixed package
-          let pkgName = item;
-          if (item.startsWith('vendor-')) {
-            pkgName = item.replace('vendor-', '');
-          }
+          return item.startsWith('vendor-') ? item.replace('vendor-', '') : item;
+        }
+        if (item instanceof RegExp) {
+          const source = item.source;
+          const match = source.match(/vendor-([a-zA-Z0-9-@/]+?)(?:[-._]|\/|$)/);
+          return match ? match[1] : null;
+        }
+        return null;
+      }
 
+      for (const item of includeArray) {
+        const pkgName = getPackageName(item);
+        if (pkgName) {
           try {
             // Check if it's an installed package
             require.resolve(pkgName);
             if (!externalArray.includes(pkgName)) {
-              console.log(`COS Plugin: [MAGIC] Externalizing package "${pkgName}"`);
+              console.log(`COS Plugin: [MAGIC] Externalizing package "${pkgName}" (matched from ${item})`);
               externalArray.push(pkgName);
             }
           } catch (e) {
@@ -130,14 +136,22 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
       const include = options.include || ['**/*'];
       const includeArray = Array.isArray(include) ? include : [include];
 
+      function getPackageName(item: string | RegExp): string | null {
+        if (typeof item === 'string') {
+          return item.startsWith('vendor-') ? item.replace('vendor-', '') : item;
+        }
+        if (item instanceof RegExp) {
+          const source = item.source;
+          const match = source.match(/vendor-([a-zA-Z0-9-@/]+?)(?:[-._]|\/|$)/);
+          return match ? match[1] : null;
+        }
+        return null;
+      }
+
       // Handle Magic externals
       for (const item of includeArray) {
-        if (typeof item !== 'string') continue;
-
-        let pkgName = item;
-        if (item.startsWith('vendor-')) {
-          pkgName = item.replace('vendor-', '');
-        }
+        const pkgName = getPackageName(item);
+        if (!pkgName) continue;
 
         try {
           let pkgPath = '';
