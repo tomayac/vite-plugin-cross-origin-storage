@@ -95,26 +95,39 @@ export default defineConfig({
 
 ## How It Works
 
-1. **Build Time**:
-   - The plugin analyzes your bundle and identifies chunks matching the
-     `include` pattern.
-   - It generates a stable hash for each managed chunk.
-   - It rewrites imports in your code to look for a global variable (e.g.,
-     `window.__COS_CHUNK_...`) containing the Blob URL of the chunk, falling
-     back to the relative network path if the variable is unset.
-   - It disables the default `<script type="module" src="...">` entry point in
-     your `index.html` and injects a custom `loader.js`.
+### Build Time
 
-2. **Runtime**:
-   - The injected loader checks for `navigator.crossOriginStorage`.
-   - If supported, it requests the file handle for each managed chunk using its
-     hash.
-   - **Cache Hit**: If found, it creates a Blob URL and assigns it to the
-     corresponding global variable.
-   - **Cache Miss**: If not found, it fetches the file from the network, stores
-     it in COS, and then creates the Blob URL.
-   - Finally, the loader imports your application's entry point, which now
-     seamlessly uses the cached assets.
+1. **Magic Externals**: For `include` patterns that resolve to npm package
+   names (e.g. `vendor-react` → `react`), the plugin externalizes the package
+   from Rollup and uses esbuild to produce a single self-contained ESM bundle.
+   This bundle is emitted as a hashed asset (e.g. `assets/react-a1b2c3d4.js`)
+   and treated as a managed chunk.
+2. **Import Rewriting**: All inter-chunk imports are rewritten from relative
+   paths (`"./chunk.js"`) to bare specifiers (`"coschunk-assets-chunk-js"`).
+   This applies to both managed and unmanaged chunks, because managed chunks
+   run as Blob URLs and cannot resolve relative paths at runtime.
+3. **Manifest Generation**: A JSON manifest is built containing the base path,
+   the entry chunk filename, a map of every managed chunk filename to its
+   SHA-256 hash, and a list of unmanaged chunks that need network-URL entries
+   in the import map.
+4. **Loader Injection**: The plugin disables the default
+   `<script type="module">` entry tag and injects a `<script id="cos-loader">`
+   containing the runtime loader with the manifest inlined.
+
+### Runtime
+
+1. The loader checks for `navigator.crossOriginStorage`.
+2. For each managed chunk it calls
+   `navigator.crossOriginStorage.requestFileHandles([{ algorithm: 'SHA-256', value: hash }])`:
+   - **Cache hit**: wraps the returned `File` as a Blob URL.
+   - **Cache miss**: fetches the chunk from the network, stores it in COS via
+     `requestFileHandles(..., { create: true })`, then wraps it as a Blob URL.
+3. Unmanaged chunks receive absolute network URLs.
+4. An `<script type="importmap">` is injected into `<head>` mapping every
+   `coschunk-*` bare specifier to its resolved URL.
+5. The entry point is imported via its bare specifier inside a `setTimeout`
+   callback so the browser has time to register the import map before the
+   first module resolution occurs.
 
 ## Requirements
 
