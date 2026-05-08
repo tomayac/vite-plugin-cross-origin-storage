@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import vitePluginCrossOriginStorage from '../dist/index.js';
+import vitePluginCrossOriginStorage from '../../dist/index.js';
 
 export default defineConfig({
   plugins: [
@@ -11,9 +11,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          a: [new URL('./a.js', import.meta.url).pathname],
-          b: [new URL('./b.js', import.meta.url).pathname],
+        manualChunks: (id) => {
+          if (id.endsWith('/a.js')) return 'a';
+          if (id.endsWith('/b.js')) return 'b';
         },
       },
     },

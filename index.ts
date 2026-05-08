@@ -1,5 +1,5 @@
 import type { Plugin } from 'vite';
-import type { OutputBundle, OutputChunk } from 'rollup';
+import type { OutputChunk } from 'rollup';
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
@@ -29,11 +29,28 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         })
       : () => true;
 
-  // Resolve loader path relative to this file
-  // When built, this file is in dist/index.js, but loader.js is in the root
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const loaderPath = path.resolve(__dirname, './loader.js');
+  const loaderPath = path.resolve(__dirname, './loader.js'); // loader.js is copied to dist/ during build
   let config: any;
+
+  const cwdRequire = createRequire(path.join(process.cwd(), 'index.js'));
+  const esbuildRequire = createRequire(import.meta.url);
+  const esbuild = esbuildRequire('esbuild');
+
+  const include = options.include || ['**/*'];
+  const includeArray = Array.isArray(include) ? include : [include];
+
+  function getPackageName(item: string | RegExp): string | null {
+    if (typeof item === 'string') {
+      return item.startsWith('vendor-') ? item.replace('vendor-', '') : item;
+    }
+    if (item instanceof RegExp) {
+      const source = item.source;
+      const match = source.match(/vendor-([a-zA-Z0-9-@/]+?)(?:[-._]|\/|$)/);
+      return match ? match[1] : null;
+    }
+    return null;
+  }
 
   return {
     name: 'vite-plugin-cos',
@@ -50,32 +67,11 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           ? [external]
           : [];
 
-      const include = options.include || ['**/*'];
-      const includeArray = Array.isArray(include) ? include : [include];
-
-      const require = createRequire(path.join(process.cwd(), 'index.js'));
-
-      function getPackageName(item: string | RegExp): string | null {
-        if (typeof item === 'string') {
-          return item.startsWith('vendor-')
-            ? item.replace('vendor-', '')
-            : item;
-        }
-        if (item instanceof RegExp) {
-          const source = item.source;
-          const match = source.match(/vendor-([a-zA-Z0-9-@/]+?)(?:[-._]|\/|$)/);
-          return match ? match[1] : null;
-        }
-        return null;
-      }
-
       for (const item of includeArray) {
         const pkgName = getPackageName(item);
         if (pkgName) {
           try {
-            // Check if it's an installed package
-            require.resolve(pkgName);
-            // Externalize the package and its subpaths to prevent Vite from bundling parts of it
+            cwdRequire.resolve(pkgName);
             const externalPatterns = [pkgName, `${pkgName}/*`];
             for (const pattern of externalPatterns) {
               if (!externalArray.includes(pattern)) {
@@ -102,16 +98,16 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
       handler(html) {
         // Disable standard entry script to let the COS loader handle it
         return html.replace(
-          /<script\s+[^>]*type=["']module["'][^>]*src=["'][^"']*index[^"']*["'][^>]*><\/script>/gi,
+          /<script\s+[^>]*type=["']module["'][^>]*src=["'][^"']+["'][^>]*><\/script>/gi,
           '<!-- Entry script disabled by COS Plugin -->'
         );
       },
     },
 
-    async generateBundle(_options, bundle: OutputBundle) {
+    async generateBundle(_options, bundle: Record<string, any>) {
       const managedChunks: Record<string, OutputChunk> = {};
       let mainChunk: OutputChunk | null = null;
-      let htmlAsset: any = null;
+      const htmlAssets: any[] = [];
 
       for (const fileName in bundle) {
         const chunk = bundle[fileName];
@@ -133,30 +129,12 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
             managedChunks[fileName] = chunk;
           }
         }
-        if (fileName === 'index.html' && chunk.type === 'asset') {
-          htmlAsset = chunk;
+        if (fileName.endsWith('.html') && chunk.type === 'asset') {
+          htmlAssets.push(chunk);
         }
       }
 
       const externalToFileName: Record<string, string> = {};
-      // Use process.cwd() to resolve from the project root
-      const require = createRequire(path.join(process.cwd(), 'index.js'));
-      const include = options.include || ['**/*'];
-      const includeArray = Array.isArray(include) ? include : [include];
-
-      function getPackageName(item: string | RegExp): string | null {
-        if (typeof item === 'string') {
-          return item.startsWith('vendor-')
-            ? item.replace('vendor-', '')
-            : item;
-        }
-        if (item instanceof RegExp) {
-          const source = item.source;
-          const match = source.match(/vendor-([a-zA-Z0-9-@/]+?)(?:[-._]|\/|$)/);
-          return match ? match[1] : null;
-        }
-        return null;
-      }
 
       // Handle Magic externals
       for (const item of includeArray) {
@@ -166,9 +144,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
         try {
           let pkgPath = '';
           try {
-            // Try to find package.json relative to the resolved entry point
-            // This avoids issues with non-exported package.json
-            const mainPath = require.resolve(pkgName);
+            const mainPath = cwdRequire.resolve(pkgName);
             let currentDir = path.dirname(mainPath);
             let pkgJsonPath = '';
             while (currentDir !== path.parse(currentDir).root) {
@@ -197,12 +173,8 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
               pkgPath = mainPath;
             }
           } catch (e) {
-            pkgPath = require.resolve(pkgName);
+            pkgPath = cwdRequire.resolve(pkgName);
           }
-
-          // Load esbuild via require for better ESM/CJS interop
-          const esbuildRequire = createRequire(import.meta.url);
-          const esbuild = esbuildRequire('esbuild');
 
           // Use esbuild to create a single self-contained ESM bundle
           const buildResult = await esbuild.build({
@@ -242,7 +214,7 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
           managedChunks[fileName] = {
             type: 'chunk',
             fileName,
-            code: content.toString(),
+            code: Buffer.from(content).toString('utf-8'),
             name: item,
           } as any;
 
@@ -366,30 +338,29 @@ export default function cosPlugin(options: CosPluginOptions = {}): Plugin {
 
         manifest.unmanaged = Array.from(unmanagedDependencies);
 
-        // Inject loader and inlined manifest into index.html
-        if (htmlAsset) {
+        // Inject loader and inlined manifest into all HTML assets
+        if (htmlAssets.length > 0) {
+          let loaderCode: string;
           try {
-            let loaderCode = fs.readFileSync(loaderPath, 'utf-8');
-            loaderCode = loaderCode.replace(
-              '__COS_MANIFEST__',
-              JSON.stringify(manifest, null, 2)
-            );
-
+            loaderCode = fs.readFileSync(loaderPath, 'utf-8');
+          } catch (e) {
+            console.error('COS Plugin: Failed to read loader.js', e);
+            return;
+          }
+          loaderCode = loaderCode.replace(
+            '__COS_MANIFEST__',
+            JSON.stringify(manifest, null, 2)
+          );
+          for (const htmlAsset of htmlAssets) {
             let htmlSource = htmlAsset.source as string;
-
-            // Remove modulepreload links to avoid double fetching keys we manage
             htmlSource = htmlSource.replace(
               /<link\s+[^>]*rel=["']modulepreload["'][^>]*>/gi,
               '<!-- modulepreload disabled by COS Plugin -->'
             );
-
-            // Inject into head
             htmlAsset.source = htmlSource.replace(
               '<head>',
               () => `<head>\n<script id="cos-loader">${loaderCode}</script>`
             );
-          } catch (e) {
-            console.error('COS Plugin: Failed to read loader.js', e);
           }
         }
       }

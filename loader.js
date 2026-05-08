@@ -120,13 +120,14 @@
     // through the import map and can find other managed chunks.
     const entrySpecifier = `coschunk-${mainEntry.replace(/\//g, '-')}`;
 
-    // Small delay to ensure the browser has fully registered the
-    // import map before resolving the first module.
-    setTimeout(() => {
-      import(entrySpecifier).catch((err) => {
-        console.error('COS Loader: Failed to start app', err);
-      });
-    }, 0);
+    // Yield to the event loop once so the browser registers the dynamically
+    // injected import map before the first module import.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      await import(entrySpecifier);
+    } catch (err) {
+      console.error('COS Loader: Failed to start app', err);
+    }
   } catch (err) {
     console.error('COS Loader: Initialization failed', err);
   }
