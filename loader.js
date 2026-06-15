@@ -24,9 +24,9 @@
   async function getBlobFromCOS(hash) {
     if (!isCOSAvailable) return null;
     try {
-      const handles = await navigator.crossOriginStorage.requestFileHandles([
-        { algorithm: 'SHA-256', value: hash },
-      ]);
+      const handle = await navigator.crossOriginStorage.requestFileHandle(
+        { algorithm: 'SHA-256', value: hash }
+      );
       if (handles && handles.length > 0) {
         return await handles[0].getFile();
       }
@@ -40,12 +40,12 @@
   async function storeBlobInCOS(blob, hash) {
     if (!isCOSAvailable) return;
     try {
-      const handles = await navigator.crossOriginStorage.requestFileHandles(
-        [{ algorithm: 'SHA-256', value: hash }],
+      const handle = await navigator.crossOriginStorage.requestFileHandle(
+        { algorithm: 'SHA-256', value: hash },
         { create: true }
       );
       if (handles && handles.length > 0) {
-        const writable = await handles[0].createWritable();
+        const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
         console.log('COS Loader: Stored chunk in COS', hash);
