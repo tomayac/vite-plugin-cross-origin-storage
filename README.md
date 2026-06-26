@@ -1,3 +1,8 @@
+> [!NOTE]
+> Superseded by [@danielroe](https://github.com/danielroe)'s
+> [danielroe/cross-origin-storage](https://github.com/danielroe/cross-origin-storage).
+> The npm package `vite-plugin-cross-origin-storage` remains the same.
+
 # vite-plugin-cross-origin-storage
 
 A Vite plugin to cache and load static assets (chunks) using the
